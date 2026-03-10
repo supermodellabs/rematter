@@ -1,0 +1,29 @@
+[project]
+name = "rematter"
+version = "0.1.0"
+description = "Frontmatter transformation tool for Obsidian vaults"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9",
+    "rich>=13",
+    "pyyaml>=6",
+    "typing-extensions>=4",
+]
+
+[project.scripts]
+rematter = "rematter.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rematter"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
