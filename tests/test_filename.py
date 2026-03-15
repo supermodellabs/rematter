@@ -162,8 +162,8 @@ def test_cli_filename_basic(vault: Path) -> None:
     result = runner.invoke(app, ["filename", str(vault), "--field", "created"])
     assert result.exit_code == 0
     dated = [f for f in vault.iterdir() if f.name.startswith("2026-")]
-    # Wikidata.md and World Bank Data Catalog.md have no 'created' — 7 files should be renamed
-    assert len(dated) == 7
+    # All 12 fixture files have 'created' — all should be renamed
+    assert len(dated) == 12
 
 
 def test_cli_filename_dry_run_makes_no_changes(vault: Path) -> None:

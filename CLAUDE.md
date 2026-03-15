@@ -14,3 +14,4 @@ uvx rematter           # run via uvx (once published)
 ## Docs
 
 .docs/architecture.md
+.docs/sync-pipeline.md

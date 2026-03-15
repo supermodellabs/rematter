@@ -1,6 +1,8 @@
 ---
 created: 2026-02-04 10:12
 modified: 2026-02-04 10:12
+synced:
+publish:
 ---
 There's a balance between two poles I find it existentially important to wobble around in life as a human being on Earth:
 

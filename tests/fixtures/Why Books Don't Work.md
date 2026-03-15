@@ -3,8 +3,10 @@ creators:
   - "[[Andy Matuschak]]"
 created: 2026-02-12 15:03
 modified: 2026-02-12 15:03
+synced:
+publish: true
 ---
-#Essay
+# Essay
 
 I've read this many times over the years. I don't put many articles in my notes, but essays that I return to repeatedly deserve a spot among the books — especially essays digging into the many weaknesses in humanity's beloved codex as a learning tool, and our puzzling insistence on its continuation as *the* primary tool for sharing and gaining knowledge.
 

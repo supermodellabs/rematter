@@ -7,9 +7,17 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from slugify import slugify
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)", re.DOTALL)
 DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} - ")
+WIKILINK_RE = re.compile(r"\[\[([^|\]]+?)(?:\|([^\]]+?))?\]\]")
+TYPE_TAG_RE = re.compile(r"(?<!\w)#([A-Z][a-zA-Z]+)")
+
+
+def _slugify(name: str) -> str:
+    """Convert a display name to a URL-safe slug."""
+    return slugify(name)
 
 
 def _load(path: Path) -> tuple[dict[str, Any], str] | None:

@@ -7,7 +7,13 @@ from pathlib import Path
 import typer
 from typing_extensions import Annotated
 
-from rematter._workers import _filename_worker, _run, _transform_worker, err_console
+from rematter._workers import (
+    _filename_worker,
+    _run,
+    _sync_run,
+    _transform_worker,
+    err_console,
+)
 
 app = typer.Typer(
     name="rematter",
@@ -76,6 +82,38 @@ def transform(
         raise typer.Exit(code=1)
 
     _run(directory, recursive, dry_run, _transform_worker, from_field=field, to_field=to)
+
+
+DEFAULT_DEST = "~/dev/winnie-sh/src/content/sky/"
+
+
+@app.command()
+def sync(
+    source: Annotated[
+        Path,
+        typer.Argument(help="Source directory of markdown files"),
+    ] = Path("."),
+    dest: Annotated[
+        Path,
+        typer.Option("--dest", "-d", help="Destination directory for synced files"),
+    ] = Path(DEFAULT_DEST),
+    output_dir: Annotated[
+        str,
+        typer.Option("--output-dir", "-o", help="URL path prefix for markdown links"),
+    ] = "/sky",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Preview changes without writing"),
+    ] = False,
+) -> None:
+    """🔁  Sync markdown files into an Astro content collection.
+
+    Validates frontmatter schema, resolves wikilinks against the combined corpus
+    of source and destination files, converts valid wikilinks to markdown links,
+    and replaces broken wikilinks with plain text. Copies transformed files to
+    [bold cyan]--dest[/].
+    """
+    _sync_run(source.expanduser(), dest.expanduser(), output_dir, dry_run)
 
 
 if __name__ == "__main__":
