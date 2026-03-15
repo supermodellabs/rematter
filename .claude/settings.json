@@ -1,0 +1,17 @@
+{
+	"permissions": {
+		"allow": ["Bash(uv run *)", "Bash(uv sync *)", "Read(~/.cache/uv/**)"]
+	},
+	"sandbox": {
+		"enabled": true,
+		"autoAllowBashIfSandboxed": false,
+		"allowUnsandboxedCommands": false,
+		"filesystem": {
+			"allowWrite": ["~/.cache/uv/**"]
+		},
+		"network": {
+			"allowedDomains": ["docs.astral.sh", "pypi.org"],
+			"allowLocalBinding": true
+		}
+	}
+}

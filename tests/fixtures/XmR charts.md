@@ -1,6 +1,8 @@
 ---
 created: 2026-01-21 13:58
 modified: 2026-02-13 14:20
+synced:
+publish: false
 ---
 [Becoming Data Driven - Common Cog](https://commoncog.com/becoming-data-driven-first-principles/)
 This is a straight up classic foundational text.

@@ -167,13 +167,10 @@ def test_cli_transform_empty_vault(empty_vault: Path) -> None:
 
 
 def test_cli_transform_files_without_field_are_skipped(vault: Path) -> None:
-    """Wikidata.md and World Bank Data Catalog.md have no 'created' — must be untouched."""
-    wikidata = vault / "Wikidata.md"
-    world_bank = vault / "World Bank Data Catalog.md"
-    wikidata_before = wikidata.read_text()
-    world_bank_before = world_bank.read_text()
+    """DuckDB.md has no 'status' field — must be untouched by a status rename."""
+    duckdb = vault / "DuckDB.md"
+    duckdb_before = duckdb.read_text()
 
-    runner.invoke(app, ["transform", str(vault), "--field", "created", "--to", "date_created"])
+    runner.invoke(app, ["transform", str(vault), "--field", "status", "--to", "reading_status"])
 
-    assert wikidata.read_text() == wikidata_before
-    assert world_bank.read_text() == world_bank_before
+    assert duckdb.read_text() == duckdb_before

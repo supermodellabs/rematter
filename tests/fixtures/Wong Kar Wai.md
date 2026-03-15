@@ -1,6 +1,8 @@
 ---
 created: 2026-01-30 00:57
 modified: 2026-03-08 12:00
+synced:
+publish:
 ---
 #Director
 

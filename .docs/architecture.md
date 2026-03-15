@@ -5,15 +5,18 @@
 ```text
 src/rematter/
 ├── __init__.py     re-exports everything; keeps test imports stable
-├── _core.py        _load(), _dump(), FRONTMATTER_RE, DATE_PREFIX_RE
-├── _workers.py     _filename_worker(), _transform_worker(), _run(), console singletons
-└── cli.py          Typer app, filename + transform commands
+├── _core.py        _load(), _dump(), regex constants (FRONTMATTER_RE, DATE_PREFIX_RE, WIKILINK_RE, TYPE_TAG_RE)
+├── _workers.py     all workers, sync pipeline helpers, _run()/_sync_run() dispatchers, console singletons
+└── cli.py          Typer app: filename, transform, sync commands
 tests/
-├── conftest.py     vault and empty_vault fixtures (shutil.copytree of tests/fixtures/)
-├── fixtures/       9 real Obsidian notes covering the main frontmatter shapes
+├── conftest.py     vault, empty_vault, mock_source, mock_dest fixtures
+├── fixtures/       12 real Obsidian notes covering main frontmatter shapes
+├── mock_source/    16 synthetic files for isolated sync testing (see .docs/sync-pipeline.md)
+├── mock_dest/      2 synthetic files (already-synced + dest-only for corpus)
 ├── test_helpers.py _load / _dump unit tests
 ├── test_filename.py
-└── test_transform.py
+├── test_transform.py
+└── test_sync.py    wikilinks, type tags, creator resolution, schema validation, sync pipeline
 ```
 
 ## Design Principles
@@ -47,3 +50,5 @@ The `isinstance(raw, datetime)` check must come **before** `isinstance(raw, date
 2. Add a `@app.command()` in `cli.py` that calls `_run(..., _<name>_worker, **kwargs)`
 3. Re-export the worker from `__init__.py`
 4. Add `tests/test_<name>.py` with worker unit tests + CLI integration tests via `typer.testing.CliRunner`
+
+Note: `sync` is a special case — it uses `_sync_run()` instead of `_run()` because it operates on source+dest directory pairs and builds a shared corpus for link resolution. See `.docs/sync-pipeline.md`.
