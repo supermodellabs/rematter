@@ -32,7 +32,10 @@ class TestSlugify:
         assert _slugify("Why Books Don't Work") == "why-books-don-t-work"
 
     def test_dash_separator(self) -> None:
-        assert _slugify("Zhuangzi - The Complete Writings") == "zhuangzi-the-complete-writings"
+        assert (
+            _slugify("Zhuangzi - The Complete Writings")
+            == "zhuangzi-the-complete-writings"
+        )
 
     def test_single_word(self) -> None:
         assert _slugify("Bodymind") == "bodymind"
@@ -140,9 +143,7 @@ class TestResolveCreators:
         assert result == [{"name": "Known Author", "slug": "known-author"}]
 
     def test_known_wikilink_with_label(self) -> None:
-        result = _resolve_creators(
-            ["[[Some Person|Display Name]]"], {"Some Person"}
-        )
+        result = _resolve_creators(["[[Some Person|Display Name]]"], {"Some Person"})
         assert result == [{"name": "Display Name", "slug": "some-person"}]
 
     def test_broken_wikilink_no_slug(self) -> None:
@@ -171,10 +172,12 @@ class TestResolveCreators:
 class TestIsTimestampLike:
     def test_date_object(self) -> None:
         from datetime import date
+
         assert _is_timestamp_like(date(2026, 1, 1)) is True
 
     def test_datetime_object(self) -> None:
         from datetime import datetime
+
         assert _is_timestamp_like(datetime(2026, 1, 1, 12, 0)) is True
 
     def test_iso_date_string(self) -> None:
@@ -627,12 +630,8 @@ class TestSyncWorker:
 class TestSyncCLI:
     """Integration tests using mock_source/mock_dest fixtures."""
 
-    def test_publishable_files_synced(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_publishable_files_synced(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "publishable-book.md" in synced_names
         assert "known-author.md" in synced_names
@@ -643,40 +642,33 @@ class TestSyncCLI:
     def test_unpublished_files_skipped(
         self, mock_source: Path, mock_dest: Path
     ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "no-publish-field.md" not in synced_names
         assert "publish-false.md" not in synced_names
         assert "publish-null.md" not in synced_names
         assert "publish-string.md" not in synced_names
 
-    def test_already_synced_skipped(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
+    def test_already_synced_skipped(self, mock_source: Path, mock_dest: Path) -> None:
         original = (mock_dest / "already-synced.md").read_text()
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         # File should not be overwritten (same modified)
         assert (mock_dest / "already-synced.md").read_text() == original
 
-    def test_schema_errors_reported(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
+    def test_schema_errors_reported(self, mock_source: Path, mock_dest: Path) -> None:
         result = runner.invoke(
             app, ["sync", str(mock_source), "--dest", str(mock_dest)]
         )
         assert result.exit_code == 1
-        assert "Missing Modified.md" in result.output or "missing required" in result.output
+        assert (
+            "Missing Modified.md" in result.output
+            or "missing required" in result.output
+        )
 
     def test_corpus_includes_dest_files(
         self, mock_source: Path, mock_dest: Path
     ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "body-links.md").read_text()
         # Known Author is in source → resolved
         assert "[Known Author](" in content
@@ -686,31 +678,19 @@ class TestSyncCLI:
         assert "Ghost" in content
         assert "[[Ghost]]" not in content
 
-    def test_type_tags_in_output(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_type_tags_in_output(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "publishable-book.md").read_text()
         assert "type: book" in content
         assert "#Book" not in content
 
-    def test_title_in_output(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_title_in_output(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "publishable-book.md").read_text()
         assert "title: Publishable Book" in content
 
-    def test_no_sync_fields_absent(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_no_sync_fields_absent(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "publishable-book.md").read_text()
         assert "own:" not in content
         assert "publish:" not in content
@@ -718,17 +698,13 @@ class TestSyncCLI:
 
     def test_dry_run(self, mock_source: Path, mock_dest: Path) -> None:
         before = {p.name for p in mock_dest.glob("*.md")}
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest), "-n"]
-        )
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest), "-n"])
         after = {p.name for p in mock_dest.glob("*.md")}
         assert before == after
 
     def test_empty_source(self, empty_vault: Path, tmp_path: Path) -> None:
         dest = tmp_path / "out"
-        result = runner.invoke(
-            app, ["sync", str(empty_vault), "--dest", str(dest)]
-        )
+        result = runner.invoke(app, ["sync", str(empty_vault), "--dest", str(dest)])
         assert "No .md files" in result.output
 
     def test_nonexistent_source(self, tmp_path: Path) -> None:
@@ -740,51 +716,35 @@ class TestSyncCLI:
     def test_creator_objects_in_synced_file(
         self, mock_source: Path, mock_dest: Path
     ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "publishable-book.md").read_text()
         # [[Known Author]] should become name/slug object
         assert "name: Known Author" in content
         assert "slug: known-author" in content
         assert "[[Known Author]]" not in content
 
-    def test_broken_creator_name_only(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_broken_creator_name_only(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "publishable-film.md").read_text()
         # [[Unknown Director]] is not in corpus → name only, no slug
         assert "name: Unknown Director" in content
         assert "slug:" not in content
         assert "[[Unknown Director]]" not in content
 
-    def test_multi_type_skipped(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_multi_type_skipped(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "multi-type.md" not in synced_names
 
     def test_unrecognized_field_errors(
         self, mock_source: Path, mock_dest: Path
     ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "unrecognized-field.md" not in synced_names
 
-    def test_dataset_type_output(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_dataset_type_output(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         content = (mock_dest / "valid-dataset.md").read_text()
         assert "type: dataset" in content
         assert "#Dataset" not in content
@@ -798,11 +758,7 @@ class TestSyncCLI:
         assert result.exit_code == 1
         assert "Bad Timestamp.md" in result.output or "timestamp" in result.output
 
-    def test_publish_string_skipped(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest)]
-        )
+    def test_publish_string_skipped(self, mock_source: Path, mock_dest: Path) -> None:
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "publish-string.md" not in synced_names

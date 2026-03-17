@@ -58,6 +58,7 @@ Timestamp defaults are validated at schema load time (`_validate_schema_defaults
 - `required: true` means the key must exist — null is a valid value (e.g. `synced: null` before first sync)
 - `allow_extra: false` (default) rejects any frontmatter key not declared in `properties`
 - Validation is two-phase: structural (missing/unrecognized) → value-level (type, enum). Structural errors bail early.
+- `--fix` reorders keys to match schema `properties` order. Schema-defined keys come first (in declaration order), any extra keys (when `allow_extra: true`) are appended in their original order. This is cosmetic but matters for Obsidian vault scanning — properties have colored icons and a consistent order makes them easy to scan visually.
 
 ## CLI
 
@@ -66,7 +67,7 @@ rematter validate <directory> [--schema PATH] [--fix] [--recursive] [--dry-run]
 ```
 
 - Default mode: report-only, exit 1 if any files fail
-- `--fix`: set defaults for missing properties that have a `default` defined
+- `--fix`: set defaults for missing properties that have a `default` defined, and reorder keys to match schema property order (schema-defined keys first, extras appended)
 - `--fix` with required field missing and no default → still errors
 - `--dry-run` + `--fix`: show what would change without writing
 

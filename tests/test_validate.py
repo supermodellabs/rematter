@@ -14,7 +14,11 @@ runner = CliRunner()
 SCHEMA = {
     "properties": {
         "created": {"type": "timestamp", "required": True, "default": "%Y-%m-%d %H:%M"},
-        "modified": {"type": "timestamp", "required": True, "default": "%Y-%m-%d %H:%M"},
+        "modified": {
+            "type": "timestamp",
+            "required": True,
+            "default": "%Y-%m-%d %H:%M",
+        },
         "synced": {"type": "timestamp", "required": True, "default": None},
         "publish": {"type": "bool", "required": True, "default": False},
         "status": {
@@ -160,25 +164,17 @@ def test_fix_adds_missing_bool_default(tmp_path: Path) -> None:
     assert result[0]["publish"] is False
 
 
-def test_fix_adds_missing_string_default(tmp_path: Path) -> None:
+def test_fix_adds_multiple_missing_defaults(tmp_path: Path) -> None:
+    """Fix should add defaults for all missing required fields at once."""
     from rematter._workers import _validate_worker
 
-    fm = {**VALID_FM, "status": None}
-    # status is optional but has a default — remove it to test fix sets it
-    del fm["status"]
-    fm_no_status = fm
-    f = _write_note(tmp_path, "fixme.md", fm_no_status)
-    # Without status, file is valid (optional field). Add status as None to trigger fix.
-    f2 = _write_note(tmp_path, "fixme2.md", {**VALID_FM})
-    # Actually test: a file missing an optional field with a default — fix should still leave it alone
-    # Let's test the more interesting case: required field missing with default
-    fm_missing = {"modified": "2026-02-12 15:03", "synced": None}
-    f3 = _write_note(tmp_path, "fixme3.md", fm_missing)
-    status, _ = _validate_worker(f3, schema=SCHEMA, fix=True, dry_run=False)
+    fm = {"modified": "2026-02-12 15:03", "synced": None}
+    f = _write_note(tmp_path, "fixme.md", fm)
+    status, _ = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
     assert status == "done"
-    result = _load(f3)
+    result = _load(f)
     assert result is not None
-    assert result[0]["publish"] is False  # default applied
+    assert result[0]["publish"] is False
 
 
 def test_fix_timestamp_default_uses_format_string(tmp_path: Path) -> None:
@@ -216,7 +212,11 @@ def test_fix_null_default_adds_key_with_null(tmp_path: Path) -> None:
     """default: null should add the key with a null value, not error as unfixable."""
     from rematter._workers import _validate_worker
 
-    fm = {"created": "2026-02-12 15:03", "modified": "2026-02-12 15:03", "publish": True}
+    fm = {
+        "created": "2026-02-12 15:03",
+        "modified": "2026-02-12 15:03",
+        "publish": True,
+    }
     # missing 'synced' — schema default is null
     f = _write_note(tmp_path, "fixme.md", fm)
     status, msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
@@ -392,7 +392,11 @@ def test_schema_accepts_valid_strftime_default(tmp_path: Path) -> None:
 
     schema = {
         "properties": {
-            "created": {"type": "timestamp", "required": True, "default": "%Y-%m-%d %H:%M"},
+            "created": {
+                "type": "timestamp",
+                "required": True,
+                "default": "%Y-%m-%d %H:%M",
+            },
         },
     }
     p = tmp_path / "_schema.yml"
@@ -412,3 +416,92 @@ def test_schema_allows_non_timestamp_defaults() -> None:
         },
     }
     _validate_schema_defaults(schema)  # should not raise
+
+
+# ── key reordering ─────────────────────────────────────────────────────────
+
+
+def test_fix_reorders_keys_to_schema_order(tmp_path: Path) -> None:
+    """Keys should be reordered to match schema property order."""
+    from rematter._workers import _validate_worker
+
+    # Write frontmatter with keys in reverse schema order
+    fm = {
+        "publish": True,
+        "synced": None,
+        "modified": "2026-02-12 15:03",
+        "created": "2026-02-12 15:03",
+    }
+    f = _write_note(tmp_path, "unordered.md", fm)
+    status, msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
+    assert status == "done"
+    assert "reorder keys" in msg
+    result = _load(f)
+    assert result is not None
+    assert list(result[0].keys()) == ["created", "modified", "synced", "publish"]
+
+
+def test_fix_reorder_preserves_extra_keys_at_end(tmp_path: Path) -> None:
+    """Keys not in the schema should appear after schema-defined keys."""
+    from rematter._workers import _validate_worker
+
+    schema = {**SCHEMA, "allow_extra": True}
+    fm = {
+        "custom": "hi",
+        "publish": True,
+        "synced": None,
+        "modified": "2026-02-12 15:03",
+        "created": "2026-02-12 15:03",
+    }
+    f = _write_note(tmp_path, "extra.md", fm)
+    status, msg = _validate_worker(f, schema=schema, fix=True, dry_run=False)
+    assert status == "done"
+    result = _load(f)
+    assert result is not None
+    keys = list(result[0].keys())
+    # Schema keys first in order, then extras
+    assert keys[:4] == ["created", "modified", "synced", "publish"]
+    assert "custom" in keys[4:]
+
+
+def test_fix_reorder_dry_run_no_write(tmp_path: Path) -> None:
+    """Dry run should report reorder but not write."""
+    from rematter._workers import _validate_worker
+
+    fm = {
+        "publish": True,
+        "synced": None,
+        "modified": "2026-02-12 15:03",
+        "created": "2026-02-12 15:03",
+    }
+    f = _write_note(tmp_path, "unordered.md", fm)
+    original = f.read_text()
+    status, msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=True)
+    assert status == "dry-run"
+    assert "reorder keys" in msg
+    assert f.read_text() == original
+
+
+def test_fix_already_ordered_skips(tmp_path: Path) -> None:
+    """If keys are already in schema order and nothing else to fix, skip."""
+    from rematter._workers import _validate_worker
+
+    f = _write_note(tmp_path, "ordered.md", VALID_FM)
+    status, _ = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
+    assert status == "skip"
+
+
+def test_fix_reorder_combined_with_missing_field(tmp_path: Path) -> None:
+    """Fix should both add missing defaults and reorder keys."""
+    from rematter._workers import _validate_worker
+
+    # Missing 'publish', and remaining keys out of order
+    fm = {"synced": None, "created": "2026-02-12 15:03", "modified": "2026-02-12 15:03"}
+    f = _write_note(tmp_path, "both.md", fm)
+    status, msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
+    assert status == "done"
+    assert "set publish" in msg
+    assert "reorder keys" in msg
+    result = _load(f)
+    assert result is not None
+    assert list(result[0].keys()) == ["created", "modified", "synced", "publish"]

@@ -17,7 +17,9 @@ runner = CliRunner()
 def test_datetime_field_uses_date_part(tmp_path: Path) -> None:
     """Obsidian's default datetime format (2026-02-12 15:03) should strip time."""
     f = tmp_path / "Andy Matuschak.md"
-    f.write_text("---\ncreated: 2026-02-12 15:03\nmodified: 2026-02-12 15:03\n---\n#Author\n")
+    f.write_text(
+        "---\ncreated: 2026-02-12 15:03\nmodified: 2026-02-12 15:03\n---\n#Author\n"
+    )
     status, msg = _filename_worker(f, field="created", dry_run=False)
     assert status == "done"
     assert "2026-02-12 - Andy Matuschak.md" in msg
@@ -62,7 +64,9 @@ def test_no_frontmatter_is_skipped(tmp_path: Path) -> None:
 def test_missing_field_is_skipped(tmp_path: Path) -> None:
     """Wikidata-style files with no date field should be silently skipped."""
     f = tmp_path / "Wikidata.md"
-    f.write_text("---\nis_meta_catalog: true\nis_api: false\nurl: https://example.com\n---\n#Dataset\n")
+    f.write_text(
+        "---\nis_meta_catalog: true\nis_api: false\nurl: https://example.com\n---\n#Dataset\n"
+    )
     status, _ = _filename_worker(f, field="created", dry_run=False)
     assert status == "skip"
     assert f.exists()
@@ -101,7 +105,9 @@ def test_dry_run_makes_no_changes(tmp_path: Path) -> None:
 def test_field_stripped_from_frontmatter(tmp_path: Path) -> None:
     """The processed field must not appear in the renamed file."""
     f = tmp_path / "Wong Kar Wai.md"
-    f.write_text("---\ncreated: 2026-01-30 00:57\nmodified: 2026-03-08 12:00\n---\n#Director\n")
+    f.write_text(
+        "---\ncreated: 2026-01-30 00:57\nmodified: 2026-03-08 12:00\n---\n#Director\n"
+    )
     _filename_worker(f, field="created", dry_run=False)
     renamed = tmp_path / "2026-01-30 - Wong Kar Wai.md"
     assert renamed.exists()
@@ -169,7 +175,9 @@ def test_cli_filename_basic(mock_source: Path) -> None:
 
 def test_cli_filename_dry_run_makes_no_changes(mock_source: Path) -> None:
     before = {f.name for f in mock_source.glob("*.md")}
-    result = runner.invoke(app, ["filename", str(mock_source), "--field", "created", "--dry-run"])
+    result = runner.invoke(
+        app, ["filename", str(mock_source), "--field", "created", "--dry-run"]
+    )
     assert result.exit_code == 1  # Bad Timestamp still errors in dry-run
     after = {f.name for f in mock_source.glob("*.md")}
     assert before == after

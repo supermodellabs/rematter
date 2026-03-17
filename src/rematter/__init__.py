@@ -1,6 +1,14 @@
 """rematter — frontmatter transformation tool for Obsidian vaults."""
 
-from rematter._core import DATE_PREFIX_RE, FRONTMATTER_RE, TYPE_TAG_RE, WIKILINK_RE, _dump, _load, _slugify
+from rematter._core import (
+    DATE_PREFIX_RE,
+    FRONTMATTER_RE,
+    TYPE_TAG_RE,
+    WIKILINK_RE,
+    _dump,
+    _load,
+    _slugify,
+)
 from rematter._workers import (
     Result,
     Status,

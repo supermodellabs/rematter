@@ -1,4 +1,27 @@
 properties:
+  status:
+    type: string
+    required: false
+    enum: [not_started, in_progress, on_hold, done, cancelled]
+    default: not_started
+  creators:
+    type: list
+    required: false
+  url:
+    type: string
+    required: false
+  own:
+    type: bool
+    required: false
+    default: false
+  is_metacatalog:
+    type: bool
+    required: false
+    default: false
+  is_api:
+    type: bool
+    required: false
+    default: false
   created:
     type: timestamp
     required: true
@@ -14,24 +37,4 @@ properties:
   publish:
     type: bool
     required: true
-    default: false
-  status:
-    type: string
-    required: false
-    enum: [not_started, in_progress, on_hold, done, cancelled]
-    default: not_started
-  creators:
-    type: list
-    required: false
-  own:
-    type: bool
-    required: false
-    default: false
-  is_metacatalog:
-    type: bool
-    required: false
-    default: false
-  is_api:
-    type: bool
-    required: false
     default: false

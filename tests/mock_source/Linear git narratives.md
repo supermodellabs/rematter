@@ -24,12 +24,12 @@ The reference section of distilled, tested ideas is first, all notes further dow
 
 Every git commit carries two identities and two timestamps:
 
-| Field              | What it represents                                    |
+| Field | What it represents |
 | ------------------ | ----------------------------------------------------- |
-| **Author**         | The person who wrote the change                       |
-| **Author date**    | When they originally wrote it                         |
-| **Committer**      | The person who created this particular commit object   |
-| **Committer date** | When this commit object was created                   |
+| **Author** | The person who wrote the change |
+| **Author date** | When they originally wrote it |
+| **Committer** | The person who created this particular commit object |
+| **Committer date** | When this commit object was created |
 
 In normal work these are identical. They diverge when a commit is **rewritten** — which is what `rebase`, `cherry-pick`, `commit --amend`, and interactive rebase (`squash`/`edit`/`reorder`) all do. These operations create new commit objects: the author date is preserved, but the committer date updates to _now_.
 
@@ -90,13 +90,13 @@ These belong in your global `~/.gitconfig`:
     audit = log --format=\"%h %G? %ad %cd %s\" --date=short
 ```
 
-| Format code | Shows                                                              |
-| ----------- | ------------------------------------------------------------------ |
-| `%h`        | Short SHA                                                          |
-| `%G?`       | Signature status (`G` good, `B` bad, `N` none, `U` untrusted)     |
-| `%ad`       | Author date                                                        |
-| `%cd`       | Committer date                                                     |
-| `%s`        | Subject line                                                       |
+| Format code | Shows |
+| --- | --- |
+| `%h` | Short SHA |
+| `%G?` | Signature status (`G` good, `B` bad, `N` none, `U` untrusted) |
+| `%ad` | Author date |
+| `%cd` | Committer date |
+| `%s` | Subject line |
 
 When author date and committer date diverge, that's the rebase fingerprint.
 
@@ -114,7 +114,7 @@ Checks whether `origin/main`'s HEAD is actually an ancestor of your current bran
 
 ### Branch Model
 
-```
+```text
 main (protected, linear history enforced)
   ├── winnie/feature-a     ← short-lived, rebased before merge
   ├── winnie/fix-b          ← same
@@ -194,7 +194,7 @@ Nobody force-pushes `main`. Ever. Branch protection enforces this, but say it ou
 
 ### Pull Request Settings
 
-_Settings → General → Pull Requests_
+#### Settings → General → Pull Requests
 
 - ✅ Allow squash merging (default message: "Pull request title")
 - ✅ Allow rebase merging
@@ -207,7 +207,7 @@ _Settings → General → Pull Requests_
 
 ### Branch Ruleset for `main`
 
-_Settings → Rules → Rulesets_
+#### Settings → Rules → Rulesets
 
 | Rule                        | Solo              | Small Team          |
 | --------------------------- | ----------------- | ------------------- |
@@ -296,7 +296,7 @@ Use the audit log alias to detect this: look for diverging author/committer date
 > [!summary]
 > PRs are never the place where history gets messy — they're the checkpoint where it gets cleaned up. The merge strategy you enforce at the repo level is what keeps `main` linear, not individual developer discipline (though that helps too).
 
-----
+---
 
 ## Sketchpad
 
