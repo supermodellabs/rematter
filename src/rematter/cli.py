@@ -27,7 +27,9 @@ app = typer.Typer(
 
 @app.command()
 def filename(
-    directory: Annotated[Path, typer.Argument(help="Directory containing markdown files")],
+    directory: Annotated[
+        Path, typer.Argument(help="Directory containing markdown files")
+    ],
     field: Annotated[
         str,
         typer.Option("--field", "-f", help="Frontmatter field containing the ISO date"),
@@ -53,7 +55,9 @@ def filename(
 
 @app.command()
 def transform(
-    directory: Annotated[Path, typer.Argument(help="Directory containing markdown files")],
+    directory: Annotated[
+        Path, typer.Argument(help="Directory containing markdown files")
+    ],
     field: Annotated[
         str,
         typer.Option("--field", "-f", help="Frontmatter field to rename"),
@@ -83,7 +87,9 @@ def transform(
         )
         raise typer.Exit(code=1)
 
-    _run(directory, recursive, dry_run, _transform_worker, from_field=field, to_field=to)
+    _run(
+        directory, recursive, dry_run, _transform_worker, from_field=field, to_field=to
+    )
 
 
 DEFAULT_DEST = "~/dev/winnie-sh/src/content/sky/"
@@ -120,10 +126,16 @@ def sync(
 
 @app.command()
 def validate(
-    directory: Annotated[Path, typer.Argument(help="Directory containing markdown files")],
+    directory: Annotated[
+        Path, typer.Argument(help="Directory containing markdown files")
+    ],
     schema: Annotated[
         Path | None,
-        typer.Option("--schema", "-s", help="Path to schema YAML (default: <directory>/_schema.yml)"),
+        typer.Option(
+            "--schema",
+            "-s",
+            help="Path to schema YAML (default: <directory>/_schema.yml)",
+        ),
     ] = None,
     fix: Annotated[
         bool,

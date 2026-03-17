@@ -339,7 +339,10 @@ def _sync_worker(
 
     # Multi-type is not supported — skip with a warning
     if len(types) > 1:
-        return "warn", f"{path.name}: multiple type tags ({', '.join(sorted(types))}) — skipping"
+        return (
+            "warn",
+            f"{path.name}: multiple type tags ({', '.join(sorted(types))}) — skipping",
+        )
 
     # Schema validation
     errors = _validate_sync_schema(fm, types)
@@ -505,9 +508,7 @@ _SCHEMA_TYPE_CHECKERS: dict[str, Callable[[Any], bool]] = {
 }
 
 
-def _validate_against_schema(
-    fm: dict[str, Any], schema: dict[str, Any]
-) -> list[str]:
+def _validate_against_schema(fm: dict[str, Any], schema: dict[str, Any]) -> list[str]:
     """Return list of error messages for schema violations."""
     errors: list[str] = []
     props = schema.get("properties", {})
@@ -606,19 +607,36 @@ def _validate_worker(
                     unfixable.append(field)
 
         if unfixable:
-            return "error", f"{path.name}: cannot fix missing required fields without defaults: {', '.join(sorted(unfixable))}"
+            return (
+                "error",
+                f"{path.name}: cannot fix missing required fields without defaults: {', '.join(sorted(unfixable))}",
+            )
 
-        if not fixed_fields:
-            # Re-validate after considering everything — nothing to fix
+        # Reorder keys to match schema order (known keys first, extras after)
+        prop_order = list(props)
+        ordered_fm = {k: fm[k] for k in prop_order if k in fm}
+        ordered_fm.update({k: v for k, v in fm.items() if k not in ordered_fm})
+        reordered = list(ordered_fm) != list(fm)
+        fm = ordered_fm
+
+        changes: list[str] = []
+        if fixed_fields:
+            changes.append(f"set {', '.join(sorted(fixed_fields))}")
+        if reordered:
+            changes.append("reorder keys")
+
+        if not changes:
             if not errors:
                 return "skip", path.name
             return "error", f"{path.name}: {'; '.join(errors)}"
 
+        summary = "; ".join(changes)
+
         if dry_run:
-            return "dry-run", f"{path.name}: would set {', '.join(sorted(fixed_fields))}"
+            return "dry-run", f"{path.name}: would {summary}"
 
         path.write_text(_dump(fm, body), encoding="utf-8")
-        return "done", f"{path.name}: set {', '.join(sorted(fixed_fields))}"
+        return "done", f"{path.name}: {summary}"
 
     # Report-only mode
     return "error", f"{path.name}: {'; '.join(errors)}"
