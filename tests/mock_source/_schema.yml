@@ -10,7 +10,7 @@ properties:
   synced:
     type: timestamp
     required: true
-    default: "%Y-%m-%d %H:%M"
+    default: null
   publish:
     type: bool
     required: true

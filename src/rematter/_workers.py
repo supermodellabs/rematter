@@ -50,7 +50,7 @@ def _run(
         raise typer.Exit(code=1)
 
     pattern = "**/*.md" if recursive else "*.md"
-    files = sorted(directory.glob(pattern))
+    files = sorted(p for p in directory.glob(pattern) if not p.name.startswith("_"))
 
     if not files:
         console.print("[yellow]🤷  No .md files found — nothing to do.[/]")
@@ -396,7 +396,7 @@ def _sync_run(
         err_console.print(f"[bold red]❌  Not a directory:[/] {source}")
         raise typer.Exit(code=1)
 
-    src_files = sorted(source.glob("*.md"))
+    src_files = sorted(p for p in source.glob("*.md") if not p.name.startswith("_"))
     if not src_files:
         console.print("[yellow]🤷  No .md files found in source — nothing to do.[/]")
         raise typer.Exit(code=0)
@@ -471,7 +471,28 @@ def _load_schema(path: Path) -> dict[str, Any]:
     """Load and return a validate schema from a YAML file."""
     if not path.exists():
         raise FileNotFoundError(f"Schema file not found: {path}")
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    schema = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    _validate_schema_defaults(schema)
+    return schema
+
+
+def _validate_schema_defaults(schema: dict[str, Any]) -> None:
+    """Validate that timestamp defaults are well-formed strftime format strings."""
+    for field, spec in schema.get("properties", {}).items():
+        default = spec.get("default")
+        if default is None or spec.get("type") != "timestamp":
+            continue
+        if not isinstance(default, str) or "%" not in default:
+            raise ValueError(
+                f"schema error: '{field}' is a timestamp — default must be a "
+                f"strftime format string (e.g. '%Y-%m-%d %H:%M'), got: {default!r}"
+            )
+        try:
+            datetime.now().strftime(default)
+        except ValueError as exc:
+            raise ValueError(
+                f"schema error: '{field}' has invalid strftime format: {default!r} — {exc}"
+            ) from exc
 
 
 _SCHEMA_TYPE_CHECKERS: dict[str, Callable[[Any], bool]] = {
@@ -533,9 +554,20 @@ def _validate_against_schema(
     return errors
 
 
+_MISSING = object()
+"""Sentinel distinguishing 'no default in schema' from 'default: null'."""
+
+
 def _resolve_default(spec: dict[str, Any]) -> Any:
-    """Resolve a schema default value, expanding strftime format strings for timestamps."""
-    default = spec.get("default")
+    """Resolve a schema default value, expanding strftime format strings for timestamps.
+
+    Returns ``_MISSING`` when the spec has no ``default`` key at all, so callers
+    can distinguish "default is null" (add key with null value) from "no default"
+    (unfixable).
+    """
+    if "default" not in spec:
+        return _MISSING
+    default = spec["default"]
     if default is None:
         return None
     if spec.get("type") == "timestamp" and isinstance(default, str) and "%" in default:
@@ -567,7 +599,7 @@ def _validate_worker(
                 if not spec.get("required", False):
                     continue
                 default = _resolve_default(spec)
-                if default is not None:
+                if default is not _MISSING:
                     fm[field] = default
                     fixed_fields.append(field)
                 else:

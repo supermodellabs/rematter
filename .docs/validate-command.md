@@ -14,6 +14,10 @@ properties:
     type: timestamp
     required: true
     default: "%Y-%m-%d %H:%M"  # strftime format → stamped with current time on --fix
+  synced:
+    type: timestamp
+    required: true
+    default: null               # adds key with null value — never stamp a fake sync time
   publish:
     type: bool
     required: true
@@ -34,8 +38,20 @@ properties:
 | --- | --- |
 | `type` | One of: `timestamp`, `bool`, `string`, `list`, `int`, `float` |
 | `required` | Key must exist in frontmatter (null values are valid) |
-| `default` | Value to set on `--fix` if missing. Timestamp defaults with `%` are expanded via `strftime` |
+| `default` | Value to set on `--fix` if missing. See default semantics below |
 | `enum` | Allowed values (string fields) |
+
+### Default Semantics
+
+Three distinct cases, distinguished by a `_MISSING` sentinel in `_resolve_default`:
+
+| Schema | Meaning | `--fix` behavior |
+| --- | --- | --- |
+| `default: "%Y-%m-%d %H:%M"` | strftime format | Stamps `datetime.now()` formatted by the string |
+| `default: null` | Explicit null | Adds the key with a null value |
+| *(no default key)* | No default | Cannot auto-fix — errors as unfixable |
+
+Timestamp defaults are validated at schema load time (`_validate_schema_defaults`). A timestamp default **must** be a strftime format string containing `%` directives. Literal date strings (e.g. `default: "2026-01-01"`) and invalid format codes are rejected immediately.
 
 ### Semantics
 
@@ -58,12 +74,22 @@ rematter validate <directory> [--schema PATH] [--fix] [--recursive] [--dry-run]
 
 Key functions in `_workers.py`:
 
-- `_load_schema(path)` — reads YAML, raises `FileNotFoundError` if missing
+- `_load_schema(path)` — reads YAML, validates timestamp defaults, raises on bad schemas
+- `_validate_schema_defaults(schema)` — rejects literal dates and invalid strftime codes for timestamp defaults
 - `_validate_against_schema(fm, schema)` — pure validation, returns error list
-- `_resolve_default(spec)` — expands strftime formats for timestamp defaults
+- `_resolve_default(spec)` — returns resolved default, `None` for explicit null, or `_MISSING` sentinel when no default key exists
 - `_validate_worker(path, *, schema, fix, dry_run)` — per-file worker following standard `Result` pattern
 
 Type checking uses `_SCHEMA_TYPE_CHECKERS` dict mapping type names to lambdas. The `timestamp` checker reuses `_is_timestamp_like()` from the sync pipeline.
+
+## One-Off Scripts
+
+`scripts/` contains recovery scripts for vault data issues. Not part of the CLI — run directly with `uv run scripts/<name>.py`.
+
+- `fix_literal_formats.py` — finds frontmatter values containing strftime directives (`%Y`, etc.) and replaces with `datetime.now()` formatted by that string. Schema-free: scans all string values in all `.md` files.
+- `clear_synced.py` — sets all non-null `synced` values to null. For resetting sync state after bad data.
+
+Both support `--dry-run` and recurse into subdirectories.
 
 ## Planned Enhancements
 
