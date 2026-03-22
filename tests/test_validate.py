@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-from rematter import _load, app
+from rematter import _filter_ignored, _load, _load_config, app
 
 runner = CliRunner()
 
@@ -34,8 +34,8 @@ SCHEMA = {
 
 
 def _write_schema(directory: Path, schema: dict | None = None) -> Path:
-    """Write a _schema.yml into directory and return the path."""
-    p = directory / "_schema.yml"
+    """Write a .rematter.yaml into directory and return the path."""
+    p = directory / ".rematter.yaml"
     p.write_text(yaml.dump(schema or SCHEMA, sort_keys=False), encoding="utf-8")
     return p
 
@@ -119,13 +119,19 @@ def test_unrecognized_field_strict(tmp_path: Path) -> None:
     assert "rating" in msg
 
 
-def test_unrecognized_field_allowed_when_allow_extra(tmp_path: Path) -> None:
+def test_sync_false_property_passes_validation(tmp_path: Path) -> None:
+    """A property with sync: false should be recognized and pass validation."""
     from rematter._workers import _validate_worker
 
-    schema = {**SCHEMA, "allow_extra": True}
+    schema_with_rating = {
+        "properties": {
+            **SCHEMA["properties"],
+            "rating": {"type": "int", "required": False, "sync": False},
+        }
+    }
     fm = {**VALID_FM, "rating": 5}
-    f = _write_note(tmp_path, "bad.md", fm)
-    status, _ = _validate_worker(f, schema=schema, fix=False, dry_run=False)
+    f = _write_note(tmp_path, "ok.md", fm)
+    status, _ = _validate_worker(f, schema=schema_with_rating, fix=False, dry_run=False)
     assert status == "skip"  # valid → skip
 
 
@@ -248,22 +254,52 @@ def test_fix_skips_required_field_without_default(tmp_path: Path) -> None:
 # ── schema loading ────────────────────────────────────────────────────────────
 
 
-def test_load_schema_from_directory(tmp_path: Path) -> None:
-    from rematter._workers import _load_schema
+def test_load_config_from_directory(tmp_path: Path) -> None:
+    from rematter._workers import _load_config
 
     _write_schema(tmp_path)
-    schema = _load_schema(tmp_path / "_schema.yml")
-    assert "properties" in schema
-    assert "created" in schema["properties"]
+    config = _load_config(tmp_path)
+    assert "created" in config.properties
 
 
-def test_load_schema_missing_raises(tmp_path: Path) -> None:
-    from rematter._workers import _load_schema
+def test_load_config_missing_raises(tmp_path: Path) -> None:
+    from rematter._workers import _load_config
 
     import pytest
 
     with pytest.raises(FileNotFoundError):
-        _load_schema(tmp_path / "_schema.yml")
+        _load_config(tmp_path)
+
+
+def test_load_config_legacy_fallback(tmp_path: Path) -> None:
+    """_schema.yml should still work with deprecation warning."""
+    from rematter._workers import _load_config
+
+    # Write as legacy _schema.yml
+    p = tmp_path / "_schema.yml"
+    p.write_text(yaml.dump(SCHEMA, sort_keys=False), encoding="utf-8")
+    config = _load_config(tmp_path)
+    assert "created" in config.properties
+
+
+def test_load_config_explicit_path(tmp_path: Path) -> None:
+    from rematter._workers import _load_config
+
+    custom = tmp_path / "custom.yaml"
+    custom.write_text(yaml.dump(SCHEMA, sort_keys=False), encoding="utf-8")
+    config = _load_config(tmp_path, explicit_path=custom)
+    assert "created" in config.properties
+
+
+def test_load_schema_legacy(tmp_path: Path) -> None:
+    """_load_schema still works for backward compatibility."""
+    from rematter._workers import _load_schema
+
+    p = tmp_path / "_schema.yml"
+    p.write_text(yaml.dump(SCHEMA, sort_keys=False), encoding="utf-8")
+    schema = _load_schema(p)
+    assert "properties" in schema
+    assert "created" in schema["properties"]
 
 
 # ── CLI integration ───────────────────────────────────────────────────────────
@@ -298,12 +334,8 @@ def test_cli_validate_custom_schema_path(tmp_path: Path) -> None:
 
 
 def test_cli_validate_missing_schema_exits_error(tmp_path: Path) -> None:
-    """No _schema.yml and no --schema flag should exit with an error."""
+    """No .rematter.yaml and no --schema flag should exit with an error."""
     _write_note(tmp_path, "note.md", VALID_FM)
-    # Remove _schema.yml if present
-    s = tmp_path / "_schema.yml"
-    if s.exists():
-        s.unlink()
     result = runner.invoke(app, ["validate", str(tmp_path)])
     assert result.exit_code != 0
 
@@ -343,7 +375,7 @@ def test_cli_validate_nonexistent_dir(tmp_path: Path) -> None:
 
 
 def test_cli_validate_schema_excludes_itself(tmp_path: Path) -> None:
-    """_schema.yml should not be validated as a markdown file."""
+    """.rematter.yaml should not be validated as a markdown file."""
     _write_schema(tmp_path)
     _write_note(tmp_path, "good.md", VALID_FM)
     result = runner.invoke(app, ["validate", str(tmp_path)])
@@ -442,10 +474,15 @@ def test_fix_reorders_keys_to_schema_order(tmp_path: Path) -> None:
 
 
 def test_fix_reorder_preserves_extra_keys_at_end(tmp_path: Path) -> None:
-    """Keys not in the schema should appear after schema-defined keys."""
+    """Keys declared later in schema should appear after earlier keys."""
     from rematter._workers import _validate_worker
 
-    schema = {**SCHEMA, "allow_extra": True}
+    schema_with_custom = {
+        "properties": {
+            **SCHEMA["properties"],
+            "custom": {"type": "string", "required": False, "sync": False},
+        }
+    }
     fm = {
         "custom": "hi",
         "publish": True,
@@ -454,12 +491,12 @@ def test_fix_reorder_preserves_extra_keys_at_end(tmp_path: Path) -> None:
         "created": "2026-02-12 15:03",
     }
     f = _write_note(tmp_path, "extra.md", fm)
-    status, msg = _validate_worker(f, schema=schema, fix=True, dry_run=False)
+    status, msg = _validate_worker(f, schema=schema_with_custom, fix=True, dry_run=False)
     assert status == "done"
     result = _load(f)
     assert result is not None
     keys = list(result[0].keys())
-    # Schema keys first in order, then extras
+    # Schema keys in order, custom at the end (declared last)
     assert keys[:4] == ["created", "modified", "synced", "publish"]
     assert "custom" in keys[4:]
 
@@ -505,3 +542,83 @@ def test_fix_reorder_combined_with_missing_field(tmp_path: Path) -> None:
     result = _load(f)
     assert result is not None
     assert list(result[0].keys()) == ["created", "modified", "synced", "publish"]
+
+
+# ── ignore config tests ────────────────────────────────────────────────────────
+
+
+def test_filter_ignored_by_filename(tmp_path: Path) -> None:
+    """Files matching a filename pattern should be excluded."""
+    files = [tmp_path / "a.md", tmp_path / "b.md", tmp_path / "draft-c.md"]
+    result = _filter_ignored(files, tmp_path, ["draft-*"])
+    assert [f.name for f in result] == ["a.md", "b.md"]
+
+
+def test_filter_ignored_by_relative_path(tmp_path: Path) -> None:
+    """Files matching a relative path pattern should be excluded."""
+    sub = tmp_path / "drafts"
+    sub.mkdir()
+    files = [tmp_path / "a.md", sub / "b.md"]
+    result = _filter_ignored(files, tmp_path, ["drafts/*"])
+    assert [f.name for f in result] == ["a.md"]
+
+
+def test_filter_ignored_empty_patterns(tmp_path: Path) -> None:
+    """No ignore patterns means all files pass through."""
+    files = [tmp_path / "a.md", tmp_path / "b.md"]
+    result = _filter_ignored(files, tmp_path, [])
+    assert result == files
+
+
+def test_load_config_ignore_key(tmp_path: Path) -> None:
+    """Config loader should parse the ignore key."""
+    config_file = tmp_path / ".rematter.yaml"
+    config_file.write_text(
+        "properties: {}\nignore:\n  - draft-*\n  - private/*\n",
+        encoding="utf-8",
+    )
+    config = _load_config(tmp_path)
+    assert config.ignore == ["draft-*", "private/*"]
+
+
+def test_load_config_no_sync_fields(tmp_path: Path) -> None:
+    """Config should derive no_sync_fields from properties with sync: false."""
+    config_file = tmp_path / ".rematter.yaml"
+    config_file.write_text(
+        "properties:\n"
+        "  title:\n    type: string\n    required: true\n"
+        "  own:\n    type: bool\n    required: false\n    sync: false\n"
+        "  publish:\n    type: bool\n    required: true\n    sync: false\n"
+        "  status:\n    type: string\n    required: false\n",
+        encoding="utf-8",
+    )
+    config = _load_config(tmp_path)
+    assert config.no_sync_fields == {"own", "publish"}
+
+
+def test_load_config_no_ignore_key(tmp_path: Path) -> None:
+    """Config without ignore key should default to empty list."""
+    config_file = tmp_path / ".rematter.yaml"
+    config_file.write_text("properties: {}\n", encoding="utf-8")
+    config = _load_config(tmp_path)
+    assert config.ignore == []
+
+
+def test_cli_validate_respects_ignore(tmp_path: Path) -> None:
+    """Validate should skip files matching ignore patterns."""
+    config_file = tmp_path / ".rematter.yaml"
+    config_file.write_text(
+        yaml.dump({
+            "properties": {"created": {"type": "timestamp", "required": True}},
+            "ignore": ["skip-*.md"],
+        }),
+        encoding="utf-8",
+    )
+    # A file that would fail validation but should be ignored
+    (tmp_path / "skip-me.md").write_text("---\nno_created: true\n---\nBody\n", encoding="utf-8")
+    # A file that passes validation
+    (tmp_path / "good.md").write_text("---\ncreated: 2026-01-01\n---\nBody\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["validate", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "skip-me" not in result.output

@@ -1,3 +1,12 @@
+# Config
+link_path_prefix: /sky
+render: false
+
+# Schema
+# Loosely ordered by data type
+# enums -> lists -> bools -> strings -> timestamps
+# last prop is always 'publish' boolean
+# as it is the critical switch in the rematter system
 properties:
   status:
     type: string
@@ -7,14 +16,12 @@ properties:
   creators:
     type: list
     required: false
-  url:
-    type: string
-    required: false
   own:
     type: bool
     required: false
     default: false
-  is_metacatalog:
+    sync: false
+  is_meta_catalog:
     type: bool
     required: false
     default: false
@@ -22,10 +29,22 @@ properties:
     type: bool
     required: false
     default: false
+  url:
+    type: string
+    required: false
+  hero:
+    type: string
+    required: false
+    requires: [heroAlt]
+  heroAlt:
+    type: string
+    required: false
+    requires: [hero]
   created:
     type: timestamp
     required: true
     default: "%Y-%m-%d %H:%M"
+    sync: false
   modified:
     type: timestamp
     required: true
@@ -38,3 +57,4 @@ properties:
     type: bool
     required: true
     default: false
+    sync: false

@@ -4,16 +4,15 @@ Schema-based frontmatter validation for markdown files. Uses the standard `_run(
 
 ## Schema Format
 
-Schema lives at `<directory>/_schema.yml` by default, overridable with `--schema`.
+Schema lives in `.rematter.yaml` by default (see `.docs/config-and-media.md` for the combined config+schema format). Legacy `_schema.yml` still works with a deprecation warning. Overridable with `--schema`.
 
 ```yaml
-allow_extra: false  # optional, defaults to false (strict)
-
 properties:
   created:
     type: timestamp
     required: true
     default: "%Y-%m-%d %H:%M"  # strftime format → stamped with current time on --fix
+    sync: false                 # stripped from dest during sync
   synced:
     type: timestamp
     required: true
@@ -22,6 +21,7 @@ properties:
     type: bool
     required: true
     default: false
+    sync: false
   status:
     type: string
     required: false
@@ -40,6 +40,8 @@ properties:
 | `required` | Key must exist in frontmatter (null values are valid) |
 | `default` | Value to set on `--fix` if missing. See default semantics below |
 | `enum` | Allowed values (string fields) |
+| `requires` | List of companion fields that must also have values (co-dependency) |
+| `sync` | Boolean (default `true`). When `false`, field is recognized but stripped from dest during sync |
 
 ### Default Semantics
 
@@ -56,9 +58,10 @@ Timestamp defaults are validated at schema load time (`_validate_schema_defaults
 ### Semantics
 
 - `required: true` means the key must exist — null is a valid value (e.g. `synced: null` before first sync)
-- `allow_extra: false` (default) rejects any frontmatter key not declared in `properties`
+- All properties must be declared in the schema — unrecognized frontmatter keys always error
+- `sync: false` marks a property as source-only — recognized by validation but stripped from dest during sync
 - Validation is two-phase: structural (missing/unrecognized) → value-level (type, enum). Structural errors bail early.
-- `--fix` reorders keys to match schema `properties` order. Schema-defined keys come first (in declaration order), any extra keys (when `allow_extra: true`) are appended in their original order. This is cosmetic but matters for Obsidian vault scanning — properties have colored icons and a consistent order makes them easy to scan visually.
+- `--fix` reorders keys to match schema `properties` order. Schema-defined keys come first (in declaration order). This is cosmetic but matters for Obsidian vault scanning — properties have colored icons and a consistent order makes them easy to scan visually.
 
 ## CLI
 
@@ -75,9 +78,10 @@ rematter validate <directory> [--schema PATH] [--fix] [--recursive] [--dry-run]
 
 Key functions in `_workers.py`:
 
-- `_load_schema(path)` — reads YAML, validates timestamp defaults, raises on bad schemas
+- `_load_config(source_dir, explicit_path=None)` — finds and loads `.rematter.yaml` or legacy `_schema.yml`, returns `RematterConfig`
+- `_load_schema(path)` — reads standalone YAML schema, validates timestamp defaults (backward compat)
 - `_validate_schema_defaults(schema)` — rejects literal dates and invalid strftime codes for timestamp defaults
-- `_validate_against_schema(fm, schema)` — pure validation, returns error list
+- `_validate_against_schema(fm, schema)` — pure validation including `requires` co-dependency checks, returns error list
 - `_resolve_default(spec)` — returns resolved default, `None` for explicit null, or `_MISSING` sentinel when no default key exists
 - `_validate_worker(path, *, schema, fix, dry_run)` — per-file worker following standard `Result` pattern
 
@@ -96,4 +100,3 @@ Both support `--dry-run` and recurse into subdirectories.
 
 - `nullable: false` schema option for strict non-null enforcement
 - Type-tag conditional validation (different required fields per type tag)
-- Config file support for schema path conventions (`.rematter/<name>.schema.yml`)

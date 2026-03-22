@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import fnmatch
 import os
 import re
+import shutil
+import sys
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from functools import partial
 from pathlib import Path
@@ -17,7 +21,10 @@ from rich.console import Console
 
 from rematter._core import (
     DATE_PREFIX_RE,
+    MD_IMAGE_RE,
+    MERMAID_RE,
     TYPE_TAG_RE,
+    WIKILINK_IMAGE_RE,
     WIKILINK_RE,
     _dump,
     _load,
@@ -34,7 +41,114 @@ Result = tuple[Status, str]
 WorkerFn = Callable[..., Result]
 
 
+# ── config ─────────────────────────────────────────────────────────────────────
+
+_CONFIG_FILENAME = ".rematter.yaml"
+_LEGACY_SCHEMA_FILENAME = "_schema.yml"
+
+
+@dataclass
+class MediaConfig:
+    """Media sync configuration."""
+
+    source: str  # relative to source dir
+    dest: str  # relative to dest dir
+    link_prefix: str  # URL prefix for rewritten refs
+
+
+@dataclass
+class RematterConfig:
+    """Combined config + schema loaded from .rematter.yaml."""
+
+    properties: dict[str, Any] = field(default_factory=dict)
+    link_path_prefix: str | None = None
+    dest: str | None = None
+    render: bool = False
+    media: MediaConfig | None = None
+    ignore: list[str] = field(default_factory=list)
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        """Return the schema portion of the config."""
+        return {"properties": self.properties}
+
+    @property
+    def no_sync_fields(self) -> set[str]:
+        """Return set of property names where sync: false."""
+        return {
+            name for name, spec in self.properties.items() if spec.get("sync") is False
+        }
+
+
+def _load_config(source_dir: Path, explicit_path: Path | None = None) -> RematterConfig:
+    """Load a .rematter.yaml config file.
+
+    Lookup order:
+    1. explicit_path (from CLI --schema / --config flag)
+    2. .rematter.yaml in source_dir
+    3. _schema.yml in source_dir (legacy, with deprecation warning)
+    """
+    if explicit_path is not None:
+        path = explicit_path
+        if not path.exists():
+            raise FileNotFoundError(f"Config file not found: {path}")
+    else:
+        path = source_dir / _CONFIG_FILENAME
+        if not path.exists():
+            legacy = source_dir / _LEGACY_SCHEMA_FILENAME
+            if legacy.exists():
+                print(
+                    f"⚠️  '{_LEGACY_SCHEMA_FILENAME}' is deprecated — "
+                    f"rename to '{_CONFIG_FILENAME}'",
+                    file=sys.stderr,
+                )
+                path = legacy
+            else:
+                raise FileNotFoundError(
+                    f"No config found in {source_dir}. "
+                    f"Create a '{_CONFIG_FILENAME}' file."
+                )
+
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+    # Parse media config
+    media = None
+    media_raw = raw.get("media")
+    if isinstance(media_raw, dict):
+        media = MediaConfig(
+            source=media_raw["source"],
+            dest=media_raw["dest"],
+            link_prefix=media_raw["link_prefix"],
+        )
+
+    config = RematterConfig(
+        properties=raw.get("properties", {}),
+        link_path_prefix=raw.get("link_path_prefix"),
+        dest=raw.get("dest"),
+        render=raw.get("render", False),
+        media=media,
+        ignore=raw.get("ignore", []),
+    )
+
+    _validate_schema_defaults(config.schema)
+    return config
+
+
 # ── shared runner ──────────────────────────────────────────────────────────────
+
+
+def _filter_ignored(files: list[Path], base_dir: Path, ignore: list[str]) -> list[Path]:
+    """Remove files matching any ignore pattern (relative to base_dir)."""
+    if not ignore:
+        return files
+    result = []
+    for f in files:
+        rel = str(f.relative_to(base_dir))
+        if not any(
+            fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(f.name, pat) for pat in ignore
+        ):
+            result.append(f)
+    return result
 
 
 def _run(
@@ -42,6 +156,7 @@ def _run(
     recursive: bool,
     dry_run: bool,
     worker: WorkerFn,
+    ignore: list[str] | None = None,
     **kwargs: Any,
 ) -> None:
     """Discover markdown files and fan out to worker via a thread pool."""
@@ -51,6 +166,7 @@ def _run(
 
     pattern = "**/*.md" if recursive else "*.md"
     files = sorted(p for p in directory.glob(pattern) if not p.name.startswith("_"))
+    files = _filter_ignored(files, directory, ignore or [])
 
     if not files:
         console.print("[yellow]🤷  No .md files found — nothing to do.[/]")
@@ -148,25 +264,6 @@ def _filename_worker(path: Path, *, field: str, dry_run: bool) -> Result:
 
 # ── sync helpers ──────────────────────────────────────────────────────────────
 
-_SYNC_BASE_REQUIRED = {"created", "modified", "synced", "publish"}
-
-_SYNC_TYPE_REQUIRED: dict[str, set[str]] = {
-    "dataset": {"is_meta_catalog", "is_api"},
-    **{
-        t: {"status", "creators", "own"}
-        for t in ("book", "film", "anime", "manga", "comic", "tv", "music")
-    },
-}
-
-_VALID_STATUS = {"not_started", "in_progress", "on_hold", "done", "cancelled"}
-
-_SYNC_KNOWN_FIELDS = (
-    _SYNC_BASE_REQUIRED
-    | {"type"}
-    | {"status", "creators", "own"}
-    | {"is_meta_catalog", "is_api"}
-)
-
 
 def _is_timestamp_like(value: Any) -> bool:
     """Check if a value is a date, datetime, or ISO-parseable string."""
@@ -188,11 +285,11 @@ def _is_timestamp_like(value: Any) -> bool:
 def _resolve_wikilinks(
     body: str,
     known_stems: set[str],
-    output_dir: str,
+    link_path_prefix: str,
 ) -> str:
     """Rewrite wikilinks in body text.
 
-    - Valid links (target stem exists in known_stems) → [label](/output_dir/stem)
+    - Valid links (target stem exists in known_stems) → [label](/prefix/stem)
     - Broken links (target not found) → plain text (label if present, else target)
     """
 
@@ -202,11 +299,57 @@ def _resolve_wikilinks(
         if target in known_stems:
             display = label if label else target
             slug = _slugify(target)
-            prefix = output_dir.rstrip("/")
+            prefix = link_path_prefix.rstrip("/")
             return f"[{display}]({prefix}/{slug})"
         return label if label else target
 
     return WIKILINK_RE.sub(_replace, body)
+
+
+def _resolve_media_refs(
+    body: str,
+    media_config: MediaConfig,
+    source_dir: Path,
+) -> tuple[str, list[tuple[Path, str]]]:
+    """Rewrite image references and collect files to copy.
+
+    Handles:
+    - Wikilink images: ![[file.png]] / ![[file.png|alt text]]
+    - Markdown images pointing to the media source dir: ![alt](source/file.png)
+
+    Returns (new_body, files_to_copy) where files_to_copy is a list of
+    (source_path, dest_filename) tuples.
+    """
+    files_to_copy: list[tuple[Path, str]] = []
+    media_source = source_dir / media_config.source
+    prefix = media_config.link_prefix.rstrip("/")
+
+    def _replace_wikilink_image(m: re.Match[str]) -> str:
+        filename = m.group(1).strip()
+        alt = m.group(2).strip() if m.group(2) else filename
+        src_path = media_source / filename
+        if src_path.exists():
+            files_to_copy.append((src_path, filename))
+            return f"![{alt}]({prefix}/{filename})"
+        return m.group(0)  # leave unchanged if file doesn't exist
+
+    def _replace_md_image(m: re.Match[str]) -> str:
+        alt = m.group(1)
+        path_str = m.group(2)
+        # Only rewrite if path points into the media source dir
+        if path_str.startswith(media_config.source + "/") or path_str.startswith(
+            media_config.source + "\\"
+        ):
+            filename = Path(path_str).name
+            src_path = media_source / filename
+            if src_path.exists():
+                files_to_copy.append((src_path, filename))
+                return f"![{alt}]({prefix}/{filename})"
+        return m.group(0)
+
+    body = WIKILINK_IMAGE_RE.sub(_replace_wikilink_image, body)
+    body = MD_IMAGE_RE.sub(_replace_md_image, body)
+    return body, files_to_copy
 
 
 def _extract_type_tags(body: str) -> tuple[list[str], str]:
@@ -247,65 +390,78 @@ def _resolve_creators(
     return resolved
 
 
-def _validate_sync_schema(fm: dict[str, Any], types: list[str]) -> list[str]:
-    """Return list of error messages for schema violations.
+_SYNC_NO_SYNC_FIELDS_DEFAULT = {"own", "publish", "created"}
 
-    Checks run in order of severity so we fail fast on structural issues
-    (missing fields, unrecognized fields, multi-type) before attempting
-    value-level validation (timestamp format, status enum).
+
+def _render_mermaid_blocks(
+    body: str,
+    slug: str,
+    dest: Path,
+    media_config: MediaConfig | None = None,
+) -> tuple[str, int]:
+    """Find mermaid code blocks, render each to SVG, replace with img tags.
+
+    Uses mermaid-py (mermaid.ink API) for rendering, which supports the full
+    modern Mermaid.js syntax including HTML-in-nodes.
+
+    When media_config is provided, SVGs are written to the media dest directory
+    and linked via the configured prefix. Otherwise they are co-located with the doc.
+
+    Returns the updated body and the count of rendered diagrams.
     """
-    errors = []
+    import contextlib
+    import io
 
-    # ── structural checks (fail fast) ────────────────────────────────────
-    missing_base = _SYNC_BASE_REQUIRED - set(fm.keys())
-    if missing_base:
-        errors.append(f"missing required fields: {', '.join(sorted(missing_base))}")
+    # mermaid-py prints an IPython warning to stdout on import — suppress it
+    with contextlib.redirect_stdout(io.StringIO()):
+        import mermaid as md
+        from mermaid.graph import Graph
 
-    unrecognized = set(fm.keys()) - _SYNC_KNOWN_FIELDS
-    if unrecognized:
-        errors.append(f"unrecognized fields: {', '.join(sorted(unrecognized))}")
+    # Determine where SVGs are written and how they're referenced
+    if media_config is not None:
+        svg_dir = dest / media_config.dest
+        svg_dir.mkdir(parents=True, exist_ok=True)
+        link_prefix = media_config.link_prefix.rstrip("/")
+    else:
+        svg_dir = dest
+        link_prefix = None
 
-    # Bail early on structural errors — no point validating values
-    if errors:
-        return errors
+    count = 0
 
-    # ── value-level checks ───────────────────────────────────────────────
-    for ts_field in ("created", "modified"):
-        val = fm.get(ts_field)
-        if val is not None and not _is_timestamp_like(val):
-            errors.append(f"'{ts_field}' must be a timestamp, got '{val}'")
+    def _replace(m: re.Match[str]) -> str:
+        nonlocal count
+        diagram = m.group(1).strip()
+        try:
+            graph = Graph(f"{slug}-{count + 1}", diagram)
+            result = md.Mermaid(graph)
+            svg = result.svg_response.text
+        except Exception:
+            return m.group(0)  # leave block unchanged if rendering fails
+        if not svg:
+            return m.group(0)
+        count += 1
+        svg_name = f"{slug}-mermaid-{count}.svg"
+        (svg_dir / svg_name).write_text(svg, encoding="utf-8")
+        if link_prefix is not None:
+            return (
+                f'<img src="{link_prefix}/{svg_name}" alt="Mermaid diagram {count}" />'
+            )
+        return f'<img src="{svg_name}" alt="Mermaid diagram {count}" />'
 
-    synced_val = fm.get("synced")
-    if synced_val is not None and not _is_timestamp_like(synced_val):
-        errors.append(f"'synced' must be a timestamp, got '{synced_val}'")
-
-    if "publish" in fm and not isinstance(fm["publish"], bool):
-        errors.append(f"'publish' must be a bool, got '{fm['publish']}'")
-
-    for t in types:
-        required = _SYNC_TYPE_REQUIRED.get(t, set())
-        missing_type = required - set(fm.keys())
-        if missing_type:
-            errors.append(f"type '{t}' requires: {', '.join(sorted(missing_type))}")
-
-    status_val = fm.get("status")
-    if status_val is not None and status_val not in _VALID_STATUS:
-        errors.append(
-            f"invalid status '{status_val}' (expected: {', '.join(sorted(_VALID_STATUS))})"
-        )
-    return errors
-
-
-_SYNC_NO_SYNC_FIELDS = {"own", "publish", "created"}
+    new_body = MERMAID_RE.sub(_replace, body)
+    return new_body, count
 
 
 def _sync_worker(
     path: Path,
     *,
     known_stems: set[str],
-    output_dir: str,
+    link_path_prefix: str,
     dest: Path,
     dry_run: bool,
+    media_config: MediaConfig | None = None,
+    no_sync_fields: set[str] | None = None,
+    schema: dict[str, Any] | None = None,
 ) -> Result:
     """Process a single file for sync: gate, validate, transform, copy."""
     parsed = _load(path)
@@ -345,7 +501,7 @@ def _sync_worker(
         )
 
     # Schema validation
-    errors = _validate_sync_schema(fm, types)
+    errors = _validate_against_schema(fm, schema) if schema is not None else []
     if errors:
         return "error", f"{path.name}: {'; '.join(errors)}"
 
@@ -357,10 +513,29 @@ def _sync_worker(
         fm["creators"] = _resolve_creators(creators, known_stems)
 
     # Resolve body wikilinks
-    new_body = _resolve_wikilinks(cleaned_body, known_stems, output_dir)
+    new_body = _resolve_wikilinks(cleaned_body, known_stems, link_path_prefix)
 
-    # Set synced timestamp
-    synced_ts = datetime.now().replace(microsecond=0).isoformat()
+    # Resolve media references
+    media_files: list[tuple[Path, str]] = []
+    if media_config is not None:
+        new_body, media_files = _resolve_media_refs(new_body, media_config, path.parent)
+
+    # Rewrite hero image path if media config is present
+    # Hero values may be wikilinks ([[hero.jpg]]) or raw paths (_media/hero.jpg)
+    if media_config is not None and "hero" in fm and fm["hero"] is not None:
+        hero_val = str(fm["hero"])
+        # Strip wikilink syntax: [[hero.jpg]] → hero.jpg
+        wikilink_match = re.fullmatch(r"\[\[([^|\]]+?)(?:\|[^\]]+?)?\]\]", hero_val)
+        if wikilink_match:
+            hero_val = wikilink_match.group(1)
+        hero_filename = Path(hero_val).name
+        hero_src = path.parent / media_config.source / hero_filename
+        if hero_src.exists():
+            media_files.append((hero_src, hero_filename))
+            fm["hero"] = f"{media_config.link_prefix.rstrip('/')}/{hero_filename}"
+
+    # Set synced timestamp (match Obsidian's format: "2026-02-04 11:01")
+    synced_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     fm["synced"] = synced_ts
 
     # Set title from source filename
@@ -371,35 +546,55 @@ def _sync_worker(
         fm["type"] = types[0]
 
     # Strip source-only fields from dest output
-    for field in _SYNC_NO_SYNC_FIELDS:
-        fm.pop(field, None)
+    strip = (
+        no_sync_fields if no_sync_fields is not None else _SYNC_NO_SYNC_FIELDS_DEFAULT
+    )
+    for f in strip:
+        fm.pop(f, None)
 
     content = _dump(fm, new_body)
 
+    media_suffix = f"  (+{len(media_files)} 🖼️)" if media_files else ""
+
     if dry_run:
-        return "dry-run", f"{path.name}  →  {dest_file.name}"
+        return "dry-run", f"{path.name}  →  {dest_file.name}{media_suffix}"
 
     dest_file.write_text(content, encoding="utf-8")
+
+    # Copy referenced media files
+    if media_files:
+        media_dest = dest / media_config.dest  # type: ignore[union-attr]
+        media_dest.mkdir(parents=True, exist_ok=True)
+        for src_path, filename in media_files:
+            shutil.copy2(src_path, media_dest / filename)
 
     # Stamp synced on source so the modified-comparison gate works next run
     src_fm["synced"] = synced_ts
     path.write_text(_dump(src_fm, body), encoding="utf-8")
 
-    return "done", f"{path.name}  →  {dest_file.name}"
+    return "done", f"{path.name}  →  {dest_file.name}{media_suffix}"
 
 
 def _sync_run(
     source: Path,
     dest: Path,
-    output_dir: str,
+    link_path_prefix: str,
+    render: bool,
     dry_run: bool,
+    recursive: bool = False,
+    media_config: MediaConfig | None = None,
+    ignore: list[str] | None = None,
+    no_sync_fields: set[str] | None = None,
+    schema: dict[str, Any] | None = None,
 ) -> None:
     """Discover files, build corpus, fan out sync workers."""
     if not source.is_dir():
         err_console.print(f"[bold red]❌  Not a directory:[/] {source}")
         raise typer.Exit(code=1)
 
-    src_files = sorted(p for p in source.glob("*.md") if not p.name.startswith("_"))
+    pattern = "**/*.md" if recursive else "*.md"
+    src_files = sorted(p for p in source.glob(pattern) if not p.name.startswith("_"))
+    src_files = _filter_ignored(src_files, source, ignore or [])
     if not src_files:
         console.print("[yellow]🤷  No .md files found in source — nothing to do.[/]")
         raise typer.Exit(code=0)
@@ -418,6 +613,8 @@ def _sync_run(
                     dest_stems.add(title)
     known_stems = src_stems | dest_stems
 
+    console.print(f"[bold]📂  {source}[/]  →  [bold]{dest}[/]\n")
+
     if dry_run:
         console.print("[dim italic]🔍  Dry run — no files will be modified.[/]\n")
 
@@ -427,9 +624,12 @@ def _sync_run(
     fn = partial(
         _sync_worker,
         known_stems=known_stems,
-        output_dir=output_dir,
+        link_path_prefix=link_path_prefix,
         dest=dest,
         dry_run=dry_run,
+        media_config=media_config,
+        no_sync_fields=no_sync_fields,
+        schema=schema,
     )
     num_workers = min(len(src_files), os.cpu_count() or 4)
 
@@ -463,6 +663,53 @@ def _sync_run(
         f"errors [{'red' if errors else 'dim'}]{errors}[/]"
     )
 
+    # ── mermaid post-processing ───────────────────────────────────────────
+    if render and done > 0:
+        # Identify synced dest files that contain mermaid blocks
+        mermaid_tasks: list[tuple[Path, str]] = []
+        for src_file, (status, _) in zip(src_files, results):
+            if status not in ("done", "dry-run"):
+                continue
+            slug = _slugify(src_file.stem)
+            dest_file = dest / f"{slug}.md"
+            if not dest_file.exists():
+                continue
+            content = dest_file.read_text(encoding="utf-8")
+            if MERMAID_RE.search(content):
+                mermaid_tasks.append((dest_file, slug))
+
+        if mermaid_tasks:
+            console.print()
+            n_diagrams = "diagram" if len(mermaid_tasks) == 1 else "diagrams"
+            if dry_run:
+                for dest_file, _ in mermaid_tasks:
+                    block_count = len(
+                        MERMAID_RE.findall(dest_file.read_text(encoding="utf-8"))
+                    )
+                    s = "s" if block_count != 1 else ""
+                    console.print(
+                        f"[cyan]🔍[/]  {dest_file.name}: "
+                        f"would render {block_count} mermaid {n_diagrams}"
+                    )
+            else:
+                for dest_file, slug in mermaid_tasks:
+                    console.print(
+                        f"[yellow]🎨[/]  {dest_file.name}: rendering mermaid {n_diagrams}…"
+                    )
+                    parsed = _load(dest_file)
+                    if parsed is None:
+                        continue
+                    fm, body = parsed
+                    new_body, count = _render_mermaid_blocks(
+                        body, slug, dest, media_config=media_config
+                    )
+                    dest_file.write_text(_dump(fm, new_body), encoding="utf-8")
+                    s = "s" if count != 1 else ""
+                    console.print(
+                        f"[green]✅[/]  {dest_file.name}: "
+                        f"{count} mermaid diagram{s} rendered"
+                    )
+
     if errors:
         raise typer.Exit(code=1)
 
@@ -481,20 +728,20 @@ def _load_schema(path: Path) -> dict[str, Any]:
 
 def _validate_schema_defaults(schema: dict[str, Any]) -> None:
     """Validate that timestamp defaults are well-formed strftime format strings."""
-    for field, spec in schema.get("properties", {}).items():
+    for property, spec in schema.get("properties", {}).items():
         default = spec.get("default")
         if default is None or spec.get("type") != "timestamp":
             continue
         if not isinstance(default, str) or "%" not in default:
             raise ValueError(
-                f"schema error: '{field}' is a timestamp — default must be a "
+                f"schema error: '{property}' is a timestamp — default must be a "
                 f"strftime format string (e.g. '%Y-%m-%d %H:%M'), got: {default!r}"
             )
         try:
             datetime.now().strftime(default)
         except ValueError as exc:
             raise ValueError(
-                f"schema error: '{field}' has invalid strftime format: {default!r} — {exc}"
+                f"schema error: '{property}' has invalid strftime format: {default!r} — {exc}"
             ) from exc
 
 
@@ -512,28 +759,26 @@ def _validate_against_schema(fm: dict[str, Any], schema: dict[str, Any]) -> list
     """Return list of error messages for schema violations."""
     errors: list[str] = []
     props = schema.get("properties", {})
-    allow_extra = schema.get("allow_extra", False)
 
-    # Structural: missing required fields
-    for field, spec in props.items():
-        if spec.get("required", False) and field not in fm:
-            errors.append(f"missing required field: {field}")
+    # Structural: missing required properties
+    for prop, spec in props.items():
+        if spec.get("required", False) and prop not in fm:
+            errors.append(f"missing required property: {prop}")
 
-    # Structural: unrecognized fields
-    if not allow_extra:
-        known = set(props.keys())
-        unrecognized = set(fm.keys()) - known
-        if unrecognized:
-            errors.append(f"unrecognized fields: {', '.join(sorted(unrecognized))}")
+    # Structural: unrecognized properties (all properties must be in schema)
+    known = set(props.keys())
+    unrecognized = set(fm.keys()) - known
+    if unrecognized:
+        errors.append(f"unrecognized properties: {', '.join(sorted(unrecognized))}")
 
     if errors:
         return errors
 
     # Value-level checks
-    for field, spec in props.items():
-        if field not in fm:
+    for property_field, spec in props.items():
+        if property_field not in fm:
             continue
-        val = fm[field]
+        val = fm[property_field]
 
         if val is None:
             continue
@@ -542,15 +787,32 @@ def _validate_against_schema(fm: dict[str, Any], schema: dict[str, Any]) -> list
         expected_type = spec.get("type")
         if expected_type and expected_type in _SCHEMA_TYPE_CHECKERS:
             if not _SCHEMA_TYPE_CHECKERS[expected_type](val):
-                errors.append(f"'{field}' must be {expected_type}, got '{val}'")
+                errors.append(
+                    f"'{property_field}' must be {expected_type}, got '{val}'"
+                )
                 continue
 
         # Enum check
         allowed = spec.get("enum")
         if allowed and val not in allowed:
             errors.append(
-                f"'{field}' value '{val}' not in allowed values: {', '.join(str(v) for v in allowed)}"
+                f"'{property_field}' value '{val}' not in allowed values: {', '.join(str(v) for v in allowed)}"
             )
+
+    # Co-dependency checks (requires)
+    for property_field, spec in props.items():
+        requires = spec.get("requires")
+        if not requires:
+            continue
+        val = fm.get(property_field)
+        if val is None:
+            continue
+        for companion in requires:
+            companion_val = fm.get(companion)
+            if companion_val is None:
+                errors.append(
+                    f"'{property_field}' requires '{companion}' to also have a value"
+                )
 
     return errors
 

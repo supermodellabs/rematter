@@ -9,6 +9,7 @@ dependencies = [
     "pyyaml>=6",
     "typing-extensions>=4",
     "python-slugify>=8.0.4",
+    "mermaid-py>=0.8.4",
 ]
 
 [project.scripts]

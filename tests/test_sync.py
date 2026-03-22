@@ -2,21 +2,81 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from unittest.mock import patch
 
-import pytest
 from typer.testing import CliRunner
 
 from rematter import (
+    MERMAID_RE,
+    WIKILINK_RE,
+    MediaConfig,
     _extract_type_tags,
     _is_timestamp_like,
     _resolve_creators,
+    _resolve_media_refs,
     _resolve_wikilinks,
     _slugify,
     _sync_worker,
-    _validate_sync_schema,
+    _validate_against_schema,
     app,
 )
+
+MOCK_SVG = '<svg xmlns="http://www.w3.org/2000/svg"><text>mock</text></svg>'
+
+# Minimal schema matching the fixture .rematter.yaml for _sync_worker unit tests
+SYNC_SCHEMA = {
+    "properties": {
+        "status": {
+            "type": "string",
+            "required": False,
+            "enum": ["not_started", "in_progress", "on_hold", "done", "cancelled"],
+        },
+        "creators": {"type": "list", "required": False},
+        "own": {"type": "bool", "required": False, "sync": False},
+        "is_meta_catalog": {"type": "bool", "required": False},
+        "is_api": {"type": "bool", "required": False},
+        "url": {"type": "string", "required": False},
+        "hero": {"type": "string", "required": False, "requires": ["heroAlt"]},
+        "heroAlt": {"type": "string", "required": False, "requires": ["hero"]},
+        "created": {"type": "timestamp", "required": True, "sync": False},
+        "modified": {"type": "timestamp", "required": True},
+        "synced": {"type": "timestamp", "required": True},
+        "publish": {"type": "bool", "required": True, "sync": False},
+    },
+}
+
+
+def _mock_render(
+    body: str, slug: str, dest: Path, media_config: MediaConfig | None = None
+) -> tuple[str, int]:
+    """Drop-in replacement for _render_mermaid_blocks that avoids network."""
+    count = 0
+
+    # Mirror real function: use media dir when configured
+    if media_config is not None:
+        svg_dir = dest / media_config.dest
+        svg_dir.mkdir(parents=True, exist_ok=True)
+        link_prefix = media_config.link_prefix.rstrip("/")
+    else:
+        svg_dir = dest
+        link_prefix = None
+
+    def _replace(m):  # type: ignore[no-untyped-def]
+        nonlocal count
+        count += 1
+        svg_name = f"{slug}-mermaid-{count}.svg"
+        (svg_dir / svg_name).write_text(MOCK_SVG, encoding="utf-8")
+        if link_prefix is not None:
+            return (
+                f'<img src="{link_prefix}/{svg_name}" alt="Mermaid diagram {count}" />'
+            )
+        return f'<img src="{svg_name}" alt="Mermaid diagram {count}" />'
+
+    new_body = MERMAID_RE.sub(_replace, body)
+    return new_body, count
+
 
 runner = CliRunner()
 
@@ -166,7 +226,7 @@ class TestResolveCreators:
         ]
 
 
-# ── _validate_sync_schema unit tests ────────────────────────────────────────
+# ── _is_timestamp_like unit tests ────────────────────────────────────────────
 
 
 class TestIsTimestampLike:
@@ -199,114 +259,6 @@ class TestIsTimestampLike:
         assert _is_timestamp_like(None) is False
 
 
-class TestValidateSyncSchema:
-    def _base_fm(self, **overrides: object) -> dict:
-        fm = {
-            "created": "2026-01-01",
-            "modified": "2026-01-01",
-            "synced": None,
-            "publish": True,
-        }
-        fm.update(overrides)
-        return fm
-
-    def test_base_fields_missing_modified(self) -> None:
-        errors = _validate_sync_schema(
-            {"created": "2026-01-01", "synced": None, "publish": True}, []
-        )
-        assert any("modified" in e for e in errors)
-
-    def test_base_fields_missing_synced(self) -> None:
-        errors = _validate_sync_schema(
-            {"created": "2026-01-01", "modified": "2026-01-01", "publish": True}, []
-        )
-        assert any("synced" in e for e in errors)
-
-    def test_base_fields_missing_publish(self) -> None:
-        errors = _validate_sync_schema(
-            {"created": "2026-01-01", "modified": "2026-01-01", "synced": None}, []
-        )
-        assert any("publish" in e for e in errors)
-
-    def test_type_specific_fields_missing(self) -> None:
-        fm = self._base_fm()
-        errors = _validate_sync_schema(fm, ["book"])
-        assert any("creators" in e for e in errors)
-        assert any("status" in e for e in errors)
-        assert any("own" in e for e in errors)
-
-    def test_invalid_status(self) -> None:
-        fm = self._base_fm(status="garbage", creators=[], own=True)
-        errors = _validate_sync_schema(fm, ["book"])
-        assert any("invalid status" in e for e in errors)
-
-    def test_valid_book(self) -> None:
-        fm = self._base_fm(status="done", creators=["Author"], own=True)
-        errors = _validate_sync_schema(fm, ["book"])
-        assert errors == []
-
-    def test_valid_no_type(self) -> None:
-        fm = self._base_fm()
-        errors = _validate_sync_schema(fm, [])
-        assert errors == []
-
-    def test_dataset_type(self) -> None:
-        fm = self._base_fm()
-        errors = _validate_sync_schema(fm, ["dataset"])
-        assert any("is_meta_catalog" in e for e in errors)
-        assert any("is_api" in e for e in errors)
-
-    def test_invalid_created_timestamp(self) -> None:
-        fm = self._base_fm(created="not-a-date")
-        errors = _validate_sync_schema(fm, [])
-        assert any("'created' must be a timestamp" in e for e in errors)
-
-    def test_invalid_modified_timestamp(self) -> None:
-        fm = self._base_fm(modified="garbage")
-        errors = _validate_sync_schema(fm, [])
-        assert any("'modified' must be a timestamp" in e for e in errors)
-
-    def test_invalid_synced_timestamp(self) -> None:
-        fm = self._base_fm(synced="bad-value")
-        errors = _validate_sync_schema(fm, [])
-        assert any("'synced' must be a timestamp" in e for e in errors)
-
-    def test_null_synced_is_valid(self) -> None:
-        fm = self._base_fm(synced=None)
-        errors = _validate_sync_schema(fm, [])
-        assert errors == []
-
-    def test_publish_must_be_bool(self) -> None:
-        fm = self._base_fm(publish="yes")
-        errors = _validate_sync_schema(fm, [])
-        assert any("'publish' must be a bool" in e for e in errors)
-
-    def test_publish_integer_not_bool(self) -> None:
-        fm = self._base_fm(publish=1)
-        errors = _validate_sync_schema(fm, [])
-        assert any("'publish' must be a bool" in e for e in errors)
-
-    def test_unrecognized_field_rejected(self) -> None:
-        fm = self._base_fm(rating=8.5)
-        errors = _validate_sync_schema(fm, [])
-        assert any("unrecognized" in e for e in errors)
-        assert any("rating" in e for e in errors)
-
-    def test_multiple_unrecognized_fields(self) -> None:
-        fm = self._base_fm(rating=8.5, color="blue")
-        errors = _validate_sync_schema(fm, [])
-        assert any("rating" in e for e in errors)
-        assert any("color" in e for e in errors)
-
-    def test_structural_errors_bail_early(self) -> None:
-        """Missing fields + bad values: only structural errors returned."""
-        fm = {"created": "not-a-date", "publish": True}
-        errors = _validate_sync_schema(fm, [])
-        # Should report missing modified/synced but NOT the bad timestamp
-        assert any("missing required" in e for e in errors)
-        assert not any("timestamp" in e for e in errors)
-
-
 # ── _sync_worker unit tests ──────────────────────────────────────────────────
 
 
@@ -323,7 +275,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "skip"
 
@@ -335,7 +287,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "skip"
 
@@ -347,7 +299,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "skip"
 
@@ -360,7 +312,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "skip"
 
@@ -376,7 +328,7 @@ class TestSyncWorker:
             "---\nmodified: 2026-03-08 12:00:00\nsynced: 2026-03-08T13:00:00\ntitle: note\n---\nBody\n",
         )
         status, msg = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "skip"
         assert "not modified" in msg
@@ -391,12 +343,15 @@ class TestSyncWorker:
         status, _ = _sync_worker(
             src,
             known_stems=set(),
-            output_dir="/sky",
+            link_path_prefix="/sky",
             dest=dest,
             dry_run=False,
+            schema=SYNC_SCHEMA,
         )
-        # Book requires status/creators/own — should error
-        assert status == "error"
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "type: book" in content
+        assert "#Book" not in content
 
     def test_valid_book_synced_with_type(self, tmp_path: Path) -> None:
         src = self._make_file(
@@ -407,7 +362,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "done"
         content = (dest / "note.md").read_text()
@@ -430,10 +385,30 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         content = (dest / "note.md").read_text()
         assert "synced: '20" in content or "synced: 20" in content
+
+    def test_synced_timestamp_matches_obsidian_format(self, tmp_path: Path) -> None:
+        """Synced timestamp should match Obsidian format: YYYY-MM-DD HH:MM (no T, no seconds)."""
+        import re
+
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\nBody\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        _sync_worker(
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
+        )
+        content = (dest / "note.md").read_text()
+        # Must be YYYY-MM-DD HH:MM with no T separator and no seconds
+        assert re.search(
+            r"synced: '?\d{4}-\d{2}-\d{2} \d{2}:\d{2}'?$", content, re.MULTILINE
+        )
+        assert "T" not in content.split("synced:")[1].split("\n")[0]
 
     def test_synced_timestamp_set_on_source(self, tmp_path: Path) -> None:
         """Source file should have synced stamped back after sync."""
@@ -444,7 +419,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         src_content = src.read_text()
         assert "synced: '20" in src_content or "synced: 20" in src_content
@@ -459,7 +434,11 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         _sync_worker(
-            src, known_stems={"Known"}, output_dir="/sky", dest=dest, dry_run=False
+            src,
+            known_stems={"Known"},
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
         )
         src_content = src.read_text()
         # Source should still have wikilinks and type tags
@@ -478,7 +457,11 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         _sync_worker(
-            src, known_stems={"Known"}, output_dir="/sky", dest=dest, dry_run=False
+            src,
+            known_stems={"Known"},
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
         )
         content = (dest / "note.md").read_text()
         assert "name: Known" in content
@@ -494,7 +477,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "done"
         dest_file = dest / "my-great-note.md"
@@ -512,10 +495,53 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert (dest / "publishable-book.md").exists()
         assert not (dest / "Publishable Book.md").exists()
+
+    def test_no_sync_fields_stripped_from_dest(self, tmp_path: Path) -> None:
+        """Fields with sync: false should be stripped from dest output."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\nstatus: done\n---\nBody\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        # Strip publish, created, and status (but not modified or synced)
+        _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            no_sync_fields={"publish", "created", "status"},
+        )
+        content = (dest / "note.md").read_text()
+        # status should be stripped (in no_sync_fields)
+        assert "status:" not in content
+        # publish, created should be stripped too
+        assert "publish:" not in content
+        assert "created:" not in content
+        # modified should be preserved (not in no_sync_fields)
+        assert "modified:" in content
+
+    def test_default_no_sync_fields_used_when_none(self, tmp_path: Path) -> None:
+        """When no_sync_fields is None, hardcoded defaults should be used."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\nown: true\n---\nBody\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        _sync_worker(
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
+        )
+        content = (dest / "note.md").read_text()
+        # Default no-sync fields: own, publish, created
+        assert "own:" not in content
+        assert "publish:" not in content
+        assert "created:" not in content
 
     def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
         original = "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\nBody\n"
@@ -523,7 +549,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=True
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=True
         )
         assert status == "dry-run"
         assert not (dest / "note.md").exists()
@@ -534,7 +560,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "skip"
 
@@ -547,7 +573,12 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, msg = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            schema=SYNC_SCHEMA,
         )
         assert status == "error"
         assert "timestamp" in msg
@@ -562,7 +593,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, msg = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "warn"
         assert "multiple type tags" in msg
@@ -578,7 +609,12 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, msg = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            schema=SYNC_SCHEMA,
         )
         assert status == "error"
         assert "unrecognized" in msg
@@ -595,7 +631,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         status, _ = _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         assert status == "done"
         content = (dest / "note.md").read_text()
@@ -613,7 +649,7 @@ class TestSyncWorker:
         dest = tmp_path / "out"
         dest.mkdir()
         _sync_worker(
-            src, known_stems=set(), output_dir="/sky", dest=dest, dry_run=False
+            src, known_stems=set(), link_path_prefix="/sky", dest=dest, dry_run=False
         )
         content = (dest / "note.md").read_text()
         assert "own:" not in content
@@ -703,13 +739,28 @@ class TestSyncCLI:
         assert before == after
 
     def test_empty_source(self, empty_vault: Path, tmp_path: Path) -> None:
+        # Write a minimal config so sync gets past the config check
+        (empty_vault / ".rematter.yaml").write_text(
+            "link_path_prefix: /sky\nproperties:\n  publish:\n    type: bool\n    required: false\n"
+        )
         dest = tmp_path / "out"
-        result = runner.invoke(app, ["sync", str(empty_vault), "--dest", str(dest)])
+        result = runner.invoke(
+            app,
+            ["sync", str(empty_vault), "--dest", str(dest), "-l", "/sky"],
+        )
         assert "No .md files" in result.output
 
     def test_nonexistent_source(self, tmp_path: Path) -> None:
         result = runner.invoke(
-            app, ["sync", str(tmp_path / "nope"), "--dest", str(tmp_path / "out")]
+            app,
+            [
+                "sync",
+                str(tmp_path / "nope"),
+                "--dest",
+                str(tmp_path / "out"),
+                "-l",
+                "/sky",
+            ],
         )
         assert result.exit_code == 1
 
@@ -762,3 +813,562 @@ class TestSyncCLI:
         runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "publish-string.md" not in synced_names
+
+    def test_mermaid_blocks_preserved_without_render(
+        self, mock_source: Path, mock_dest: Path
+    ) -> None:
+        """Without --render, mermaid code blocks pass through unchanged."""
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
+        content = (mock_dest / "mermaid-diagram-and-table.md").read_text()
+        assert "```mermaid" in content
+        assert ".svg" not in content
+
+    @patch("rematter._workers._render_mermaid_blocks", side_effect=_mock_render)
+    def test_mermaid_blocks_rendered_with_flag(
+        self, mock_render, mock_source: Path, mock_dest: Path
+    ) -> None:
+        """With --render, mermaid code blocks become img tags and SVGs are written."""
+        runner.invoke(
+            app, ["sync", str(mock_source), "--dest", str(mock_dest), "--render"]
+        )
+        content = (mock_dest / "mermaid-diagram-and-table.md").read_text()
+        assert "```mermaid" not in content
+        assert '<img src="mermaid-diagram-and-table-mermaid-1.svg"' in content
+        assert (mock_dest / "mermaid-diagram-and-table-mermaid-1.svg").exists()
+        svg = (mock_dest / "mermaid-diagram-and-table-mermaid-1.svg").read_text()
+        assert "<svg" in svg
+
+    def test_render_dry_run_no_svgs(self, mock_source: Path, mock_dest: Path) -> None:
+        """Dry run with --render should not write SVG files."""
+        runner.invoke(
+            app,
+            ["sync", str(mock_source), "--dest", str(mock_dest), "--render", "-n"],
+        )
+        svgs = list(mock_dest.glob("*.svg"))
+        assert svgs == []
+
+    @patch("rematter._workers._render_mermaid_blocks", side_effect=_mock_render)
+    def test_render_output_shows_status(
+        self, mock_render, mock_source: Path, mock_dest: Path
+    ) -> None:
+        """With --render, output shows rendering status lines."""
+        result = runner.invoke(
+            app, ["sync", str(mock_source), "--dest", str(mock_dest), "--render"]
+        )
+        assert "rendering mermaid" in result.output
+        assert "rendered" in result.output
+
+
+# ── MERMAID_RE unit tests ────────────────────────────────────────────────────
+
+
+class TestMermaidRegex:
+    def test_matches_mermaid_block(self) -> None:
+        body = "text\n```mermaid\ngraph TD\n  A --> B\n```\nmore text"
+        matches = MERMAID_RE.findall(body)
+        assert len(matches) == 1
+        assert "graph TD" in matches[0]
+
+    def test_no_match_on_other_code_blocks(self) -> None:
+        body = "```python\nprint('hi')\n```"
+        assert MERMAID_RE.findall(body) == []
+
+    def test_multiple_blocks(self) -> None:
+        body = "```mermaid\nA --> B\n```\ntext\n```mermaid\nC --> D\n```"
+        matches = MERMAID_RE.findall(body)
+        assert len(matches) == 2
+
+
+# ── _render_mermaid_blocks unit tests ────────────────────────────────────────
+
+
+class TestRenderMermaidBlocks:
+    """Unit tests using _mock_render since _render_mermaid_blocks needs network."""
+
+    def test_renders_single_block(self, tmp_path: Path) -> None:
+        body = "Before\n```mermaid\ngraph TD\n  A --> B\n```\nAfter"
+        new_body, count = _mock_render(body, "test-note", tmp_path)
+        assert count == 1
+        assert "```mermaid" not in new_body
+        assert '<img src="test-note-mermaid-1.svg"' in new_body
+        assert "Before" in new_body
+        assert "After" in new_body
+        svg_file = tmp_path / "test-note-mermaid-1.svg"
+        assert svg_file.exists()
+        assert "<svg" in svg_file.read_text()
+
+    def test_renders_multiple_blocks(self, tmp_path: Path) -> None:
+        body = "```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\ngraph LR\n  C --> D\n```"
+        new_body, count = _mock_render(body, "multi", tmp_path)
+        assert count == 2
+        assert (tmp_path / "multi-mermaid-1.svg").exists()
+        assert (tmp_path / "multi-mermaid-2.svg").exists()
+
+    def test_no_mermaid_blocks_unchanged(self, tmp_path: Path) -> None:
+        body = "Just plain text\n\n```python\nprint('hi')\n```"
+        new_body, count = _mock_render(body, "no-mermaid", tmp_path)
+        assert count == 0
+        assert new_body == body
+
+    def test_surrounding_content_preserved(self, tmp_path: Path) -> None:
+        body = "# Title\n\nIntro paragraph.\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n## Next Section\n\nMore content."
+        new_body, count = _mock_render(body, "preserve", tmp_path)
+        assert count == 1
+        assert "# Title" in new_body
+        assert "Intro paragraph." in new_body
+        assert "## Next Section" in new_body
+        assert "More content." in new_body
+
+
+# ── sync + mermaid post-processing tests ─────────────────────────────────────
+
+
+class TestSyncMermaidPostProcessing:
+    def _make_file(self, path: Path, content: str) -> Path:
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    @patch("rematter._workers._render_mermaid_blocks", side_effect=_mock_render)
+    def test_render_produces_svg_in_post_step(
+        self, mock_render, tmp_path: Path
+    ) -> None:
+        """Mermaid rendering happens after sync, producing SVG files."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
+            "```mermaid\ngraph TD\n  A --> B\n```\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        # Use _sync_worker first (no render), then simulate post-processing
+        status, _ = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+        )
+        assert status == "done"
+        # Dest file should have mermaid blocks (sync doesn't render)
+        content = (dest / "note.md").read_text()
+        assert "```mermaid" in content
+        assert not list(dest.glob("*.svg"))
+
+    def test_sync_without_render_preserves_blocks(self, tmp_path: Path) -> None:
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
+            "```mermaid\ngraph TD\n  A --> B\n```\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "```mermaid" in content
+        assert not list(dest.glob("*.svg"))
+
+
+# ── mermaid SVGs to media dir tests ──────────────────────────────────────────
+
+
+class TestMermaidMediaDir:
+    """When media_config is present, rendered SVGs go to the media dest dir."""
+
+    def test_render_svgs_to_media_dir(self, tmp_path: Path) -> None:
+        """SVGs are written to media dest dir with link prefix in img tags."""
+        dest = tmp_path / "out"
+        dest.mkdir()
+        media = MediaConfig(source="_media", dest="src/assets", link_prefix="/assets")
+        body = "Before\n```mermaid\ngraph TD\n  A --> B\n```\nAfter"
+        new_body, count = _mock_render(body, "test-note", dest, media_config=media)
+        assert count == 1
+        assert '<img src="/assets/test-note-mermaid-1.svg"' in new_body
+        assert (dest / "src" / "assets" / "test-note-mermaid-1.svg").exists()
+        assert not (dest / "test-note-mermaid-1.svg").exists()
+
+    def test_render_svgs_colocated_without_media(self, tmp_path: Path) -> None:
+        """Without media config, SVGs are still co-located with the doc."""
+        dest = tmp_path / "out"
+        dest.mkdir()
+        body = "```mermaid\ngraph TD\n  A --> B\n```"
+        new_body, count = _mock_render(body, "test-note", dest, media_config=None)
+        assert count == 1
+        assert '<img src="test-note-mermaid-1.svg"' in new_body
+        assert (dest / "test-note-mermaid-1.svg").exists()
+
+
+# ── sync path feedback tests ────────────────────────────────────────────────
+
+
+class TestSyncPathFeedback:
+    """Sync output shows source and dest paths at the top."""
+
+    def test_output_shows_path_header(self, tmp_path: Path) -> None:
+        """Sync output starts with a source → dest path header."""
+        src = tmp_path / "s"
+        src.mkdir()
+        (src / ".rematter.yaml").write_text(
+            "link_path_prefix: /sky\nproperties:\n  publish:\n    type: bool\n    required: true\n"
+        )
+        (src / "note.md").write_text("---\npublish: true\n---\nContent.\n")
+        dest = tmp_path / "d"
+        result = runner.invoke(app, ["sync", str(src), "--dest", str(dest)])
+        # Rich wraps long paths with newlines + padding — strip all whitespace
+        collapsed = re.sub(r"\s+", "", result.output)
+        assert "→" in collapsed
+        assert re.sub(r"\s+", "", str(src)) in collapsed
+        assert re.sub(r"\s+", "", str(dest)) in collapsed
+
+
+# ── WIKILINK_RE image collision tests ─────────────────────────────────────────
+
+
+class TestWikilinkImageCollision:
+    """Ensure WIKILINK_RE does not match image wikilinks (![[...]])."""
+
+    def test_image_wikilink_not_matched(self) -> None:
+        body = "See ![[photo.png]] and [[Normal Link]]."
+        matches = WIKILINK_RE.findall(body)
+        assert len(matches) == 1
+        assert matches[0][0] == "Normal Link"
+
+    def test_image_with_alt_not_matched(self) -> None:
+        body = "![[photo.png|My Photo]]"
+        matches = WIKILINK_RE.findall(body)
+        assert len(matches) == 0
+
+    def test_resolve_wikilinks_ignores_images(self) -> None:
+        body = "![[photo.png]] and [[Known]]."
+        result = _resolve_wikilinks(body, {"Known"}, "/sky")
+        assert "![[photo.png]]" in result
+        assert "[Known](/sky/known)" in result
+
+
+# ── _resolve_media_refs tests ─────────────────────────────────────────────────
+
+
+class TestResolveMediaRefs:
+    def _media_config(self) -> MediaConfig:
+        return MediaConfig(source="_media", dest="src/assets", link_prefix="/assets")
+
+    def test_wikilink_image_rewritten(self, tmp_path: Path) -> None:
+        (tmp_path / "_media").mkdir()
+        (tmp_path / "_media" / "photo.png").write_text("img")
+        body = "Before ![[photo.png]] after."
+        new_body, files = _resolve_media_refs(body, self._media_config(), tmp_path)
+        assert "![photo.png](/assets/photo.png)" in new_body
+        assert len(files) == 1
+        assert files[0][1] == "photo.png"
+
+    def test_wikilink_image_with_alt(self, tmp_path: Path) -> None:
+        (tmp_path / "_media").mkdir()
+        (tmp_path / "_media" / "photo.png").write_text("img")
+        body = "![[photo.png|My Photo]]"
+        new_body, files = _resolve_media_refs(body, self._media_config(), tmp_path)
+        assert "![My Photo](/assets/photo.png)" in new_body
+        assert len(files) == 1
+
+    def test_markdown_image_rewritten(self, tmp_path: Path) -> None:
+        (tmp_path / "_media").mkdir()
+        (tmp_path / "_media" / "diagram.svg").write_text("svg")
+        body = "![A diagram](_media/diagram.svg)"
+        new_body, files = _resolve_media_refs(body, self._media_config(), tmp_path)
+        assert "![A diagram](/assets/diagram.svg)" in new_body
+        assert len(files) == 1
+
+    def test_nonexistent_media_unchanged(self, tmp_path: Path) -> None:
+        (tmp_path / "_media").mkdir()
+        body = "![[nonexistent.png]]"
+        new_body, files = _resolve_media_refs(body, self._media_config(), tmp_path)
+        assert new_body == body
+        assert files == []
+
+    def test_only_referenced_files_collected(self, tmp_path: Path) -> None:
+        (tmp_path / "_media").mkdir()
+        (tmp_path / "_media" / "used.png").write_text("img")
+        (tmp_path / "_media" / "unused.png").write_text("img")
+        body = "![[used.png]]"
+        _, files = _resolve_media_refs(body, self._media_config(), tmp_path)
+        filenames = [f[1] for f in files]
+        assert "used.png" in filenames
+        assert "unused.png" not in filenames
+
+    def test_md_image_outside_media_dir_unchanged(self, tmp_path: Path) -> None:
+        body = "![alt](other/path/photo.png)"
+        new_body, files = _resolve_media_refs(body, self._media_config(), tmp_path)
+        assert new_body == body
+        assert files == []
+
+
+# ── media sync integration tests ──────────────────────────────────────────────
+
+
+class TestMediaSync:
+    def _make_file(self, path: Path, content: str) -> Path:
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_media_files_copied_to_dest(self, tmp_path: Path) -> None:
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        media_dir = src_dir / "_media"
+        media_dir.mkdir()
+        (media_dir / "photo.png").write_text("fake-img")
+        self._make_file(
+            src_dir / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
+            "![[photo.png]]\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        mc = MediaConfig(source="_media", dest="assets", link_prefix="/assets")
+        status, _ = _sync_worker(
+            src_dir / "note.md",
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            media_config=mc,
+        )
+        assert status == "done"
+        assert (dest / "assets" / "photo.png").exists()
+        content = (dest / "note.md").read_text()
+        assert "![photo.png](/assets/photo.png)" in content
+
+    def test_dry_run_no_media_copy(self, tmp_path: Path) -> None:
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        media_dir = src_dir / "_media"
+        media_dir.mkdir()
+        (media_dir / "photo.png").write_text("fake-img")
+        self._make_file(
+            src_dir / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
+            "![[photo.png]]\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        mc = MediaConfig(source="_media", dest="assets", link_prefix="/assets")
+        status, _ = _sync_worker(
+            src_dir / "note.md",
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=True,
+            media_config=mc,
+        )
+        assert status == "dry-run"
+        assert not (dest / "assets").exists()
+
+    def test_no_media_config_skips_processing(self, tmp_path: Path) -> None:
+        self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
+            "![[photo.png]]\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            tmp_path / "note.md",
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            media_config=None,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        # Without media config, wikilink images are left as-is
+        assert "![[photo.png]]" in content
+
+
+# ── hero image tests ──────────────────────────────────────────────────────────
+
+
+class TestHeroImage:
+    def _make_file(self, path: Path, content: str) -> Path:
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_hero_wikilink_rewritten_during_sync(self, tmp_path: Path) -> None:
+        """Hero as wikilink [[hero.jpg]] should be resolved and rewritten."""
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        media_dir = src_dir / "_media"
+        media_dir.mkdir()
+        (media_dir / "hero.jpg").write_text("fake-jpg")
+        self._make_file(
+            src_dir / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n"
+            'hero: "[[hero.jpg]]"\nheroAlt: A hero image\n---\nBody.\n',
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        mc = MediaConfig(source="_media", dest="assets", link_prefix="/assets")
+        status, _ = _sync_worker(
+            src_dir / "note.md",
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            media_config=mc,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "hero: /assets/hero.jpg" in content
+        assert "heroAlt: A hero image" in content
+        assert (dest / "assets" / "hero.jpg").exists()
+
+    def test_hero_raw_path_still_works(self, tmp_path: Path) -> None:
+        """Hero as a raw path should still be handled for backward compat."""
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        media_dir = src_dir / "_media"
+        media_dir.mkdir()
+        (media_dir / "hero.jpg").write_text("fake-jpg")
+        self._make_file(
+            src_dir / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n"
+            "hero: _media/hero.jpg\nheroAlt: A hero image\n---\nBody.\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        mc = MediaConfig(source="_media", dest="assets", link_prefix="/assets")
+        status, _ = _sync_worker(
+            src_dir / "note.md",
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            media_config=mc,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "hero: /assets/hero.jpg" in content
+        assert (dest / "assets" / "hero.jpg").exists()
+
+    def test_hero_without_media_config_unchanged(self, tmp_path: Path) -> None:
+        self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n"
+            'hero: "[[hero.jpg]]"\nheroAlt: Alt text\n---\nBody.\n',
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            tmp_path / "note.md",
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            media_config=None,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        # Without media config, hero value passes through unchanged
+        assert "[[hero.jpg]]" in content
+
+
+# ── co-dependency validation tests ────────────────────────────────────────────
+
+
+class TestRequiresValidation:
+    def test_hero_without_heroalt_errors(self) -> None:
+        schema = {
+            "properties": {
+                "hero": {"type": "string", "required": False, "requires": ["heroAlt"]},
+                "heroAlt": {
+                    "type": "string",
+                    "required": False,
+                    "requires": ["hero"],
+                },
+            },
+        }
+        fm = {"hero": "img.png"}
+        errors = _validate_against_schema(fm, schema)
+        assert any("heroAlt" in e for e in errors)
+
+    def test_heroalt_without_hero_errors(self) -> None:
+        schema = {
+            "properties": {
+                "hero": {"type": "string", "required": False, "requires": ["heroAlt"]},
+                "heroAlt": {
+                    "type": "string",
+                    "required": False,
+                    "requires": ["hero"],
+                },
+            },
+        }
+        fm = {"heroAlt": "Alt text"}
+        errors = _validate_against_schema(fm, schema)
+        assert any("hero" in e for e in errors)
+
+    def test_both_present_passes(self) -> None:
+        schema = {
+            "properties": {
+                "hero": {"type": "string", "required": False, "requires": ["heroAlt"]},
+                "heroAlt": {
+                    "type": "string",
+                    "required": False,
+                    "requires": ["hero"],
+                },
+            },
+        }
+        fm = {"hero": "img.png", "heroAlt": "Alt text"}
+        errors = _validate_against_schema(fm, schema)
+        assert errors == []
+
+    def test_neither_present_passes(self) -> None:
+        schema = {
+            "properties": {
+                "hero": {"type": "string", "required": False, "requires": ["heroAlt"]},
+                "heroAlt": {
+                    "type": "string",
+                    "required": False,
+                    "requires": ["hero"],
+                },
+            },
+        }
+        fm: dict = {}
+        errors = _validate_against_schema(fm, schema)
+        assert errors == []
+
+
+# ── config loading tests ──────────────────────────────────────────────────────
+
+
+class TestConfigLoading:
+    def test_cli_override_precedence(self, mock_source: Path, mock_dest: Path) -> None:
+        """CLI flags should override config values."""
+        result = runner.invoke(
+            app,
+            [
+                "sync",
+                str(mock_source),
+                "--dest",
+                str(mock_dest),
+                "-l",
+                "/custom-prefix",
+            ],
+        )
+        # Should use /custom-prefix instead of config's /sky
+        content = (mock_dest / "body-links.md").read_text()
+        assert "/custom-prefix/" in content
+
+    def test_config_provides_prefix(self, mock_source: Path, mock_dest: Path) -> None:
+        """Config link_path_prefix should be used when no CLI flag given."""
+        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
+        content = (mock_dest / "body-links.md").read_text()
+        assert "/sky/" in content
+
+    def test_no_dest_no_config_errors(self, tmp_path: Path) -> None:
+        """No --dest and no config dest should error."""
+        result = runner.invoke(app, ["sync", str(tmp_path)])
+        assert result.exit_code != 0

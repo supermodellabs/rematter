@@ -9,6 +9,7 @@ from typing_extensions import Annotated
 
 from rematter._workers import (
     _filename_worker,
+    _load_config,
     _load_schema,
     _run,
     _sync_run,
@@ -92,9 +93,6 @@ def transform(
     )
 
 
-DEFAULT_DEST = "~/dev/winnie-sh/src/content/sky/"
-
-
 @app.command()
 def sync(
     source: Annotated[
@@ -102,13 +100,29 @@ def sync(
         typer.Argument(help="Source directory of markdown files"),
     ] = Path("."),
     dest: Annotated[
-        Path,
+        Path | None,
         typer.Option("--dest", "-d", help="Destination directory for synced files"),
-    ] = Path(DEFAULT_DEST),
-    output_dir: Annotated[
-        str,
-        typer.Option("--output-dir", "-o", help="URL path prefix for markdown links"),
-    ] = "/sky",
+    ] = None,
+    link_path_prefix: Annotated[
+        str | None,
+        typer.Option(
+            "--link-path-prefix",
+            "-l",
+            help="URL path prefix for markdown links",
+        ),
+    ] = None,
+    render: Annotated[
+        bool | None,
+        typer.Option(
+            "--render",
+            "-g",
+            help="Render mermaid code blocks to SVG files",
+        ),
+    ] = None,
+    recursive: Annotated[
+        bool,
+        typer.Option("--recursive", "-r", help="Recurse into subdirectories"),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", "-n", help="Preview changes without writing"),
@@ -119,9 +133,61 @@ def sync(
     Validates frontmatter schema, resolves wikilinks against the combined corpus
     of source and destination files, converts valid wikilinks to markdown links,
     and replaces broken wikilinks with plain text. Copies transformed files to
-    [bold cyan]--dest[/].
+    [bold cyan]--dest[/]. Use [bold cyan]--render[/] to convert mermaid diagrams
+    to SVG.
     """
-    _sync_run(source.expanduser(), dest.expanduser(), output_dir, dry_run)
+    expanded_source = source.expanduser()
+
+    try:
+        config = _load_config(expanded_source)
+    except FileNotFoundError:
+        err_console.print(
+            f"[bold red]❌  No config found in:[/] {expanded_source}. "
+            "Create a '.rematter.yaml' file."
+        )
+        raise typer.Exit(code=1)
+
+    # Resolve dest: CLI flag > config > error
+    resolved_dest = dest
+    if resolved_dest is None and config.dest is not None:
+        resolved_dest = Path(config.dest)
+    if resolved_dest is None:
+        err_console.print(
+            "[bold red]❌  No destination specified.[/] "
+            "Use --dest or set 'dest' in .rematter.yaml."
+        )
+        raise typer.Exit(code=1)
+
+    # Resolve link_path_prefix: CLI flag > config > error
+    resolved_prefix = link_path_prefix
+    if resolved_prefix is None:
+        resolved_prefix = config.link_path_prefix
+    if resolved_prefix is None:
+        err_console.print(
+            "[bold red]❌  No link path prefix specified.[/] "
+            "Use --link-path-prefix or set 'link_path_prefix' in .rematter.yaml."
+        )
+        raise typer.Exit(code=1)
+
+    # Resolve render: CLI flag > config > default False
+    resolved_render = render
+    if resolved_render is None:
+        resolved_render = config.render
+    if resolved_render is None:
+        resolved_render = False
+
+    _sync_run(
+        expanded_source,
+        resolved_dest.expanduser(),
+        resolved_prefix,
+        resolved_render,
+        dry_run,
+        recursive=recursive,
+        media_config=config.media,
+        ignore=config.ignore,
+        no_sync_fields=config.no_sync_fields,
+        schema=config.schema,
+    )
 
 
 @app.command()
@@ -134,7 +200,7 @@ def validate(
         typer.Option(
             "--schema",
             "-s",
-            help="Path to schema YAML (default: <directory>/_schema.yml)",
+            help="Path to schema YAML (default: <directory>/.rematter.yaml)",
         ),
     ] = None,
     fix: Annotated[
@@ -152,19 +218,35 @@ def validate(
 ) -> None:
     """Validate markdown frontmatter against a schema.
 
-    Reads [bold cyan]_schema.yml[/] from the target directory (or [bold cyan]--schema[/])
-    and checks each file's frontmatter for missing fields, wrong types, and
-    unrecognized properties. Use [bold cyan]--fix[/] to set default values for
-    missing properties that define a default in the schema.
+    Reads [bold cyan].rematter.yaml[/] from the target directory (or
+    [bold cyan]--schema[/]) and checks each file's frontmatter for missing fields,
+    wrong types, and unrecognized properties. Use [bold cyan]--fix[/] to set default
+    values for missing properties that define a default in the schema.
     """
-    schema_path = schema or (directory / "_schema.yml")
-    try:
-        schema_data = _load_schema(schema_path)
-    except FileNotFoundError:
-        err_console.print(f"[bold red]No schema found at:[/] {schema_path}")
-        raise typer.Exit(code=1)
+    ignore: list[str] = []
+    if schema is not None:
+        # Explicit path — could be old _schema.yml or new .rematter.yaml
+        try:
+            schema_data = _load_schema(schema)
+        except FileNotFoundError:
+            err_console.print(f"[bold red]No schema found at:[/] {schema}")
+            raise typer.Exit(code=1)
+    else:
+        try:
+            config = _load_config(directory)
+            schema_data = config.schema
+            ignore = config.ignore
+        except FileNotFoundError:
+            err_console.print(
+                f"[bold red]No config found in:[/] {directory}. "
+                "Create a '.rematter.yaml' file."
+            )
+            raise typer.Exit(code=1)
 
-    _run(directory, recursive, dry_run, _validate_worker, schema=schema_data, fix=fix)
+    _run(
+        directory, recursive, dry_run, _validate_worker,
+        ignore=ignore, schema=schema_data, fix=fix,
+    )
 
 
 if __name__ == "__main__":

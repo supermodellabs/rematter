@@ -2,6 +2,19 @@
 
 Syncs Obsidian vault markdown into an Astro content collection. Unlike `filename` and `transform` (which use `_run()` for simple per-file mutations), sync has its own dispatcher `_sync_run()` and a multi-stage worker pipeline.
 
+## Config Resolution
+
+The sync command resolves settings from both CLI flags and `.rematter.yaml` config files. CLI flags always win. See `.docs/config-and-media.md` for the config file format.
+
+Resolution order for each setting:
+
+| Setting | CLI flag | Config key | Required? |
+| --- | --- | --- | --- |
+| dest | `--dest / -d` | `dest` | Yes — errors if neither provided |
+| link_path_prefix | `--link-path-prefix / -l` | `link_path_prefix` | Yes — errors if neither provided |
+| render | `--render / -g` | `render` | No — defaults to `false` |
+| media | *(none)* | `media` | No — media sync skipped if absent |
+
 ## Worker Pipeline (`_sync_worker`)
 
 Each source file passes through these stages in order:
@@ -12,19 +25,32 @@ Each source file passes through these stages in order:
 4. **Modified comparison** — if dest file exists and has same `modified` value → skip
 5. **Type tag extraction** — `_extract_type_tags(body)` finds capitalized Obsidian tags (`#Book`, `#Film`, `#TV`), returns lowercased types + body with tag-only lines stripped
 6. **Multi-type gate** — more than one capitalized tag → warn and skip (lowercase tags are ignored, treated as content)
-7. **Schema validation** — `_validate_sync_schema(fm, types)` runs structural checks first (missing fields, unrecognized fields), bails early if any fail, then value-level checks (timestamp format, bool type, type-specific fields, status enum)
+7. **Schema validation** — `_validate_against_schema(fm, schema)` when a schema is provided; same function used by the `validate` command. Schema is the single source of truth for field names, types, and requirements
 8. **Creator resolution** — `_resolve_creators()` converts `fm["creators"]` from wikilinks/strings to `{name, slug}` objects
-9. **Body wikilink resolution** — `_resolve_wikilinks()` on cleaned body
-10. **Set `synced`** — ISO timestamp without microseconds
-11. **Set `title`** — source filename stem (original, not slugified)
-12. **Set `type`** — scalar from single type tag, omitted if none
-13. **Strip source-only fields** — `own`, `publish`, `created` removed from dest output (`_SYNC_NO_SYNC_FIELDS`)
-14. **Write dest** — transformed content to slugified dest file
-15. **Write source** — stamp `synced` back on source file (original body + frontmatter preserved, only `synced` updated)
+9. **Body wikilink resolution** — `_resolve_wikilinks()` on cleaned body. `WIKILINK_RE` has a `(?<!\!)` lookbehind so `![[image.png]]` refs are not mangled
+10. **Media resolution** — if `media_config` is present, `_resolve_media_refs()` rewrites `![[image.png]]` and `![alt](_media/image.png)` refs, collects files to copy
+11. **Hero rewrite** — if `media_config` and `hero` field present, strips wikilink syntax (`[[hero.jpg]]` → `hero.jpg`), rewrites hero path, adds to media copy list
+12. **Set `synced`** — `strftime("%Y-%m-%d %H:%M")` to match Obsidian's native format (space separator, no seconds)
+13. **Set `title`** — source filename stem (original, not slugified)
+14. **Set `type`** — scalar from single type tag, omitted if none
+15. **Strip no-sync fields** — fields with `sync: false` in schema are removed from dest output (falls back to `_SYNC_NO_SYNC_FIELDS_DEFAULT`: `own`, `publish`, `created` when no schema provided)
+16. **Write dest** — transformed content to slugified dest file
+17. **Copy media** — referenced media files copied to dest media dir (mkdir + `shutil.copy2`)
+18. **Write source** — stamp `synced` back on source file (original body + frontmatter preserved, only `synced` updated)
 
 Source write-back uses a shallow copy of the frontmatter taken before any mutations (creator resolution, type setting). This ensures the source file retains its wikilinks, type tags, and all original content.
 
-Dry-run skips both writes (steps 14-15).
+Dry-run skips writes (steps 16-18) and media copies.
+
+## Output
+
+Sync output starts with a `📂 source → dest` path header showing where files are being synced, followed by per-file results and the summary line.
+
+## Mermaid Post-Processing
+
+When `--render` is passed, `_sync_run()` runs a second pass after the main sync completes. This is deliberately decoupled from the sync pipeline so non-mermaid files complete at full speed. `media_config` is threaded through to `_render_mermaid_blocks` so generated SVGs land in the media dest directory (not co-located with docs) when media is configured.
+
+See `.docs/mermaid-rendering.md` for details.
 
 ## Filename Slugification
 
@@ -54,7 +80,7 @@ All creators get both `name` and `slug`, whether they were wikilinks or plain st
 
 ## Source-Only Fields
 
-These fields are validated in source but stripped from dest output:
+Fields with `sync: false` in the schema are validated in source but stripped from dest output. The set is derived from `RematterConfig.no_sync_fields` and threaded into `_sync_worker` as `no_sync_fields`. When no schema is provided, `_SYNC_NO_SYNC_FIELDS_DEFAULT` is used:
 
 | Field | Reason |
 | --- | --- |
@@ -62,36 +88,13 @@ These fields are validated in source but stripped from dest output:
 | `publish` | Implied by presence in dest |
 | `created` | Never newer than `modified`; Astro site uses `modified` only |
 
-## Schema
+## Schema Validation
 
-Base required fields (`_SYNC_BASE_REQUIRED`): `created`, `modified`, `synced`, `publish`
+Sync uses `_validate_against_schema()` — the same function as the `validate` command. The schema from `.rematter.yaml` is threaded into `_sync_worker` via `_sync_run`. There are no hardcoded field lists; the schema is the single source of truth for field names, types, required/optional status, enums, and co-dependencies.
 
-All must be present in source frontmatter. Type constraints:
+If no `.rematter.yaml` exists, sync errors immediately — config is required.
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `created` | timestamp | date, datetime, or ISO string; must be non-null |
-| `modified` | timestamp | date, datetime, or ISO string; must be non-null |
-| `synced` | timestamp | may be null in source (gets stamped during sync) |
-| `publish` | bool | must be `true` or `false`, not a string or int |
-
-`_is_timestamp_like()` validates timestamps: accepts `date`/`datetime` objects and ISO-parseable strings. Uses `date.fromisoformat()` with `datetime.fromisoformat()` fallback.
-
-Recognized fields (`_SYNC_KNOWN_FIELDS`): base fields + `type` + `status`, `creators`, `own` + `is_meta_catalog`, `is_api`. Any field outside this set triggers an error.
-
-Validation is two-phase to fail fast:
-
-1. **Structural** — missing required, unrecognized fields → bail immediately
-2. **Value-level** — timestamp format, bool type, type-specific required fields, status enum
-
-Type-specific required fields (triggered by capitalized tags in body):
-
-| Type | Required Fields |
-| --- | --- |
-| book, film, anime, manga, comic, tv, music | `status`, `creators`, `own` |
-| dataset | `is_meta_catalog`, `is_api` |
-
-Valid `status` values: `not_started`, `in_progress`, `on_hold`, `done`, `cancelled`
+`_is_timestamp_like()` validates timestamp fields: accepts `date`/`datetime` objects and ISO-parseable strings. Uses `date.fromisoformat()` with `datetime.fromisoformat()` fallback.
 
 ## Type Tag Regex
 
@@ -120,7 +123,7 @@ Body wikilinks resolve to markdown links for known stems, plain text for broken 
 
 ## Test Fixtures
 
-Sync tests use dedicated `mock_source/` (16 files) and `mock_dest/` (2 files) directories, not the main `fixtures/` vault.
+Sync tests use dedicated `mock_source/` (29 .md files + `.rematter.yaml` + `_media/`) and `mock_dest/` (2 files) directories.
 
 `mock_source` coverage:
 
@@ -133,10 +136,14 @@ Sync tests use dedicated `mock_source/` (16 files) and `mock_dest/` (2 files) di
 | Multi-type skip | Multi Type (`#Book #Film`) |
 | Schema: bad values | Bad Timestamp (non-ISO `created`) |
 | Type-specific validation | Book Missing Fields (missing creators/status/own) |
-| Valid syncs | Publishable Book, Publishable Film, Known Author, Body Links, Heading Not Tag, Valid Dataset |
+| Valid syncs | Publishable Book, Publishable Film, Known Author, Body Links, Heading Not Tag, Valid Dataset, Mermaid Diagram and Table |
 
 `mock_dest` has 2 files (slugified names with `title` in frontmatter): an already-synced file (same `modified`) and a dest-only file for corpus inclusion.
 
-## Adding New Type Requirements
+Additional test classes for sync output:
+- `TestSyncPathFeedback` — verifies source → dest path header appears in output
+- `TestMermaidMediaDir` — SVGs go to media dir with link prefix when configured (in `test_sync.py`)
 
-Add entries to `_SYNC_TYPE_REQUIRED` in `_workers.py`. Media types sharing the same field set can be added to the comprehension. Types with unique requirements get their own key. Add the new type's fields to `_SYNC_KNOWN_FIELDS` as well.
+## Adding New Fields
+
+Add new properties to the `properties` section of `.rematter.yaml`. The schema drives all validation for both `sync` and `validate` commands — no code changes needed for new fields.

@@ -11,8 +11,11 @@ from slugify import slugify
 
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)", re.DOTALL)
 DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} - ")
-WIKILINK_RE = re.compile(r"\[\[([^|\]]+?)(?:\|([^\]]+?))?\]\]")
+WIKILINK_RE = re.compile(r"(?<!\!)\[\[([^|\]]+?)(?:\|([^\]]+?))?\]\]")
+WIKILINK_IMAGE_RE = re.compile(r"!\[\[([^|\]]+?)(?:\|([^\]]+?))?\]\]")
+MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 TYPE_TAG_RE = re.compile(r"(?<!\w)#([A-Z][a-zA-Z]+)")
+MERMAID_RE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 
 
 def _slugify(name: str) -> str:

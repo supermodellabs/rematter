@@ -5,19 +5,31 @@
 ```text
 src/rematter/
 ├── __init__.py     re-exports everything; keeps test imports stable
-├── _core.py        _load(), _dump(), regex constants (FRONTMATTER_RE, DATE_PREFIX_RE, WIKILINK_RE, TYPE_TAG_RE)
-├── _workers.py     all workers, sync/validate helpers, _run()/_sync_run() dispatchers, console singletons
+├── _core.py        _load(), _dump(), regex constants, _slugify()
+├── _workers.py     all workers, config/schema loading, sync/validate helpers, dispatchers, ignore filtering, console singletons
 └── cli.py          Typer app: filename, transform, sync, validate commands
 tests/
 ├── conftest.py     mock_source, mock_dest, empty_vault fixtures
-├── mock_source/    28 .md files + _schema.yml — all fixture data lives here
+├── mock_source/    29 .md files + .rematter.yaml + _media/ — all fixture data lives here
 ├── mock_dest/      2 synthetic files (already-synced + dest-only for corpus)
 ├── test_helpers.py _load / _dump unit tests
 ├── test_filename.py
 ├── test_transform.py
-├── test_sync.py    wikilinks, type tags, creator resolution, schema validation, sync pipeline
-└── test_validate.py schema validation, fix mode, CLI integration
+├── test_sync.py    wikilinks, type tags, creator resolution, schema validation, sync pipeline, media sync, hero images
+└── test_validate.py schema validation, fix mode, config loading, CLI integration
 ```
+
+## Regex Constants in `_core.py`
+
+| Name | Purpose |
+| --- | --- |
+| `FRONTMATTER_RE` | Extracts YAML frontmatter block and body |
+| `DATE_PREFIX_RE` | Detects files already prefixed with `YYYY-MM-DD -` |
+| `WIKILINK_RE` | Matches `[[target]]` and `[[target\|label]]` — has `(?<!\!)` lookbehind to skip image refs |
+| `WIKILINK_IMAGE_RE` | Matches `![[file.png]]` and `![[file.png\|alt]]` image refs |
+| `MD_IMAGE_RE` | Matches standard markdown images `![alt](path)` |
+| `TYPE_TAG_RE` | Matches capitalized Obsidian tags like `#Book` |
+| `MERMAID_RE` | Matches mermaid code blocks |
 
 ## Design Principles
 

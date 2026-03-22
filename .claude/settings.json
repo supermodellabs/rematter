@@ -10,7 +10,7 @@
 			"allowWrite": ["~/.cache/uv/**"]
 		},
 		"network": {
-			"allowedDomains": ["docs.astral.sh", "pypi.org"],
+			"allowedDomains": ["docs.astral.sh", "pypi.org", "pythonhosted.org"],
 			"allowLocalBinding": true
 		}
 	}
