@@ -12,7 +12,6 @@ Resolution order for each setting:
 | --- | --- | --- | --- |
 | dest | `--dest / -d` | `dest` | Yes — errors if neither provided |
 | link_path_prefix | `--link-path-prefix / -l` | `link_path_prefix` | Yes — errors if neither provided |
-| render | `--render / -g` | `render` | No — defaults to `false` |
 | media | *(none)* | `media` | No — media sync skipped if absent |
 
 ## Worker Pipeline (`_sync_worker`)
@@ -45,12 +44,6 @@ Dry-run skips writes (steps 16-18) and media copies.
 ## Output
 
 Sync output starts with a `📂 source → dest` path header showing where files are being synced, followed by per-file results and the summary line.
-
-## Mermaid Post-Processing
-
-When `--render` is passed, `_sync_run()` runs a second pass after the main sync completes. This is deliberately decoupled from the sync pipeline so non-mermaid files complete at full speed. `media_config` is threaded through to `_render_mermaid_blocks` so generated SVGs land in the media dest directory (not co-located with docs) when media is configured.
-
-See `.docs/mermaid-rendering.md` for details.
 
 ## Filename Slugification
 
@@ -142,7 +135,6 @@ Sync tests use dedicated `mock_source/` (29 .md files + `.rematter.yaml` + `_med
 
 Additional test classes for sync output:
 - `TestSyncPathFeedback` — verifies source → dest path header appears in output
-- `TestMermaidMediaDir` — SVGs go to media dir with link prefix when configured (in `test_sync.py`)
 
 ## Adding New Fields
 

@@ -16,5 +16,4 @@ uvx rematter           # run via uvx (once published)
 .docs/architecture.md
 .docs/sync-pipeline.md
 .docs/config-and-media.md
-.docs/mermaid-rendering.md
 .docs/validate-command.md

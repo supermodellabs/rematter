@@ -10,7 +10,6 @@ Combined config + schema file. Replaces the old `_schema.yml` (which is still lo
 # Config keys (top-level)
 link_path_prefix: /sky
 dest: ~/dev/winnie-sh/src/content/sky/
-render: false
 ignore:
   - draft-*
   - private/*
@@ -49,7 +48,6 @@ properties:
 | --- | --- | --- | --- |
 | `link_path_prefix` | string | URL prefix for resolved wikilinks (e.g. `/sky`) | `--link-path-prefix / -l` |
 | `dest` | string | Destination directory for synced files | `--dest / -d` |
-| `render` | bool | Render mermaid blocks to SVG | `--render / -r` |
 | `media` | object | Media sync config (see below) | *(none — config only)* |
 | `ignore` | list | Glob patterns for files/dirs to skip (matched against filename and relative path) | *(none — config only)* |
 

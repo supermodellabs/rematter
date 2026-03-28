@@ -29,7 +29,6 @@ tests/
 | `WIKILINK_IMAGE_RE` | Matches `![[file.png]]` and `![[file.png\|alt]]` image refs |
 | `MD_IMAGE_RE` | Matches standard markdown images `![alt](path)` |
 | `TYPE_TAG_RE` | Matches capitalized Obsidian tags like `#Book` |
-| `MERMAID_RE` | Matches mermaid code blocks |
 
 ## Design Principles
 

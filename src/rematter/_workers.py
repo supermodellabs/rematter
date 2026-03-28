@@ -22,7 +22,6 @@ from rich.console import Console
 from rematter._core import (
     DATE_PREFIX_RE,
     MD_IMAGE_RE,
-    MERMAID_RE,
     TYPE_TAG_RE,
     WIKILINK_IMAGE_RE,
     WIKILINK_RE,
@@ -63,7 +62,6 @@ class RematterConfig:
     properties: dict[str, Any] = field(default_factory=dict)
     link_path_prefix: str | None = None
     dest: str | None = None
-    render: bool = False
     media: MediaConfig | None = None
     ignore: list[str] = field(default_factory=list)
 
@@ -125,7 +123,6 @@ def _load_config(source_dir: Path, explicit_path: Path | None = None) -> Rematte
         properties=raw.get("properties", {}),
         link_path_prefix=raw.get("link_path_prefix"),
         dest=raw.get("dest"),
-        render=raw.get("render", False),
         media=media,
         ignore=raw.get("ignore", []),
     )
@@ -393,65 +390,6 @@ def _resolve_creators(
 _SYNC_NO_SYNC_FIELDS_DEFAULT = {"own", "publish", "created"}
 
 
-def _render_mermaid_blocks(
-    body: str,
-    slug: str,
-    dest: Path,
-    media_config: MediaConfig | None = None,
-) -> tuple[str, int]:
-    """Find mermaid code blocks, render each to SVG, replace with img tags.
-
-    Uses mermaid-py (mermaid.ink API) for rendering, which supports the full
-    modern Mermaid.js syntax including HTML-in-nodes.
-
-    When media_config is provided, SVGs are written to the media dest directory
-    and linked via the configured prefix. Otherwise they are co-located with the doc.
-
-    Returns the updated body and the count of rendered diagrams.
-    """
-    import contextlib
-    import io
-
-    # mermaid-py prints an IPython warning to stdout on import — suppress it
-    with contextlib.redirect_stdout(io.StringIO()):
-        import mermaid as md
-        from mermaid.graph import Graph
-
-    # Determine where SVGs are written and how they're referenced
-    if media_config is not None:
-        svg_dir = dest / media_config.dest
-        svg_dir.mkdir(parents=True, exist_ok=True)
-        link_prefix = media_config.link_prefix.rstrip("/")
-    else:
-        svg_dir = dest
-        link_prefix = None
-
-    count = 0
-
-    def _replace(m: re.Match[str]) -> str:
-        nonlocal count
-        diagram = m.group(1).strip()
-        try:
-            graph = Graph(f"{slug}-{count + 1}", diagram)
-            result = md.Mermaid(graph)
-            svg = result.svg_response.text
-        except Exception:
-            return m.group(0)  # leave block unchanged if rendering fails
-        if not svg:
-            return m.group(0)
-        count += 1
-        svg_name = f"{slug}-mermaid-{count}.svg"
-        (svg_dir / svg_name).write_text(svg, encoding="utf-8")
-        if link_prefix is not None:
-            return (
-                f'<img src="{link_prefix}/{svg_name}" alt="Mermaid diagram {count}" />'
-            )
-        return f'<img src="{svg_name}" alt="Mermaid diagram {count}" />'
-
-    new_body = MERMAID_RE.sub(_replace, body)
-    return new_body, count
-
-
 def _sync_worker(
     path: Path,
     *,
@@ -579,7 +517,6 @@ def _sync_run(
     source: Path,
     dest: Path,
     link_path_prefix: str,
-    render: bool,
     dry_run: bool,
     recursive: bool = False,
     media_config: MediaConfig | None = None,
@@ -662,53 +599,6 @@ def _sync_run(
         f"skipped [dim]{skipped}[/] · "
         f"errors [{'red' if errors else 'dim'}]{errors}[/]"
     )
-
-    # ── mermaid post-processing ───────────────────────────────────────────
-    if render and done > 0:
-        # Identify synced dest files that contain mermaid blocks
-        mermaid_tasks: list[tuple[Path, str]] = []
-        for src_file, (status, _) in zip(src_files, results):
-            if status not in ("done", "dry-run"):
-                continue
-            slug = _slugify(src_file.stem)
-            dest_file = dest / f"{slug}.md"
-            if not dest_file.exists():
-                continue
-            content = dest_file.read_text(encoding="utf-8")
-            if MERMAID_RE.search(content):
-                mermaid_tasks.append((dest_file, slug))
-
-        if mermaid_tasks:
-            console.print()
-            n_diagrams = "diagram" if len(mermaid_tasks) == 1 else "diagrams"
-            if dry_run:
-                for dest_file, _ in mermaid_tasks:
-                    block_count = len(
-                        MERMAID_RE.findall(dest_file.read_text(encoding="utf-8"))
-                    )
-                    s = "s" if block_count != 1 else ""
-                    console.print(
-                        f"[cyan]🔍[/]  {dest_file.name}: "
-                        f"would render {block_count} mermaid {n_diagrams}"
-                    )
-            else:
-                for dest_file, slug in mermaid_tasks:
-                    console.print(
-                        f"[yellow]🎨[/]  {dest_file.name}: rendering mermaid {n_diagrams}…"
-                    )
-                    parsed = _load(dest_file)
-                    if parsed is None:
-                        continue
-                    fm, body = parsed
-                    new_body, count = _render_mermaid_blocks(
-                        body, slug, dest, media_config=media_config
-                    )
-                    dest_file.write_text(_dump(fm, new_body), encoding="utf-8")
-                    s = "s" if count != 1 else ""
-                    console.print(
-                        f"[green]✅[/]  {dest_file.name}: "
-                        f"{count} mermaid diagram{s} rendered"
-                    )
 
     if errors:
         raise typer.Exit(code=1)

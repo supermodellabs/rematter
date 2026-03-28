@@ -1,6 +1,5 @@
 # Config
 link_path_prefix: /sky
-render: false
 
 # Schema
 # Loosely ordered by data type

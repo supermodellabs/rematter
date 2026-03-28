@@ -111,14 +111,6 @@ def sync(
             help="URL path prefix for markdown links",
         ),
     ] = None,
-    render: Annotated[
-        bool | None,
-        typer.Option(
-            "--render",
-            "-g",
-            help="Render mermaid code blocks to SVG files",
-        ),
-    ] = None,
     recursive: Annotated[
         bool,
         typer.Option("--recursive", "-r", help="Recurse into subdirectories"),
@@ -133,8 +125,7 @@ def sync(
     Validates frontmatter schema, resolves wikilinks against the combined corpus
     of source and destination files, converts valid wikilinks to markdown links,
     and replaces broken wikilinks with plain text. Copies transformed files to
-    [bold cyan]--dest[/]. Use [bold cyan]--render[/] to convert mermaid diagrams
-    to SVG.
+    [bold cyan]--dest[/].
     """
     expanded_source = source.expanduser()
 
@@ -169,18 +160,10 @@ def sync(
         )
         raise typer.Exit(code=1)
 
-    # Resolve render: CLI flag > config > default False
-    resolved_render = render
-    if resolved_render is None:
-        resolved_render = config.render
-    if resolved_render is None:
-        resolved_render = False
-
     _sync_run(
         expanded_source,
         resolved_dest.expanduser(),
         resolved_prefix,
-        resolved_render,
         dry_run,
         recursive=recursive,
         media_config=config.media,
@@ -244,8 +227,13 @@ def validate(
             raise typer.Exit(code=1)
 
     _run(
-        directory, recursive, dry_run, _validate_worker,
-        ignore=ignore, schema=schema_data, fix=fix,
+        directory,
+        recursive,
+        dry_run,
+        _validate_worker,
+        ignore=ignore,
+        schema=schema_data,
+        fix=fix,
     )
 
 

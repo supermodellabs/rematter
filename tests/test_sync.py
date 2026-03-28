@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 from rematter import (
-    MERMAID_RE,
     WIKILINK_RE,
     MediaConfig,
     _extract_type_tags,
@@ -22,8 +20,6 @@ from rematter import (
     _validate_against_schema,
     app,
 )
-
-MOCK_SVG = '<svg xmlns="http://www.w3.org/2000/svg"><text>mock</text></svg>'
 
 # Minimal schema matching the fixture .rematter.yaml for _sync_worker unit tests
 SYNC_SCHEMA = {
@@ -46,36 +42,6 @@ SYNC_SCHEMA = {
         "publish": {"type": "bool", "required": True, "sync": False},
     },
 }
-
-
-def _mock_render(
-    body: str, slug: str, dest: Path, media_config: MediaConfig | None = None
-) -> tuple[str, int]:
-    """Drop-in replacement for _render_mermaid_blocks that avoids network."""
-    count = 0
-
-    # Mirror real function: use media dir when configured
-    if media_config is not None:
-        svg_dir = dest / media_config.dest
-        svg_dir.mkdir(parents=True, exist_ok=True)
-        link_prefix = media_config.link_prefix.rstrip("/")
-    else:
-        svg_dir = dest
-        link_prefix = None
-
-    def _replace(m):  # type: ignore[no-untyped-def]
-        nonlocal count
-        count += 1
-        svg_name = f"{slug}-mermaid-{count}.svg"
-        (svg_dir / svg_name).write_text(MOCK_SVG, encoding="utf-8")
-        if link_prefix is not None:
-            return (
-                f'<img src="{link_prefix}/{svg_name}" alt="Mermaid diagram {count}" />'
-            )
-        return f'<img src="{svg_name}" alt="Mermaid diagram {count}" />'
-
-    new_body = MERMAID_RE.sub(_replace, body)
-    return new_body, count
 
 
 runner = CliRunner()
@@ -813,195 +779,6 @@ class TestSyncCLI:
         runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
         synced_names = {p.name for p in mock_dest.glob("*.md")}
         assert "publish-string.md" not in synced_names
-
-    def test_mermaid_blocks_preserved_without_render(
-        self, mock_source: Path, mock_dest: Path
-    ) -> None:
-        """Without --render, mermaid code blocks pass through unchanged."""
-        runner.invoke(app, ["sync", str(mock_source), "--dest", str(mock_dest)])
-        content = (mock_dest / "mermaid-diagram-and-table.md").read_text()
-        assert "```mermaid" in content
-        assert ".svg" not in content
-
-    @patch("rematter._workers._render_mermaid_blocks", side_effect=_mock_render)
-    def test_mermaid_blocks_rendered_with_flag(
-        self, mock_render, mock_source: Path, mock_dest: Path
-    ) -> None:
-        """With --render, mermaid code blocks become img tags and SVGs are written."""
-        runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest), "--render"]
-        )
-        content = (mock_dest / "mermaid-diagram-and-table.md").read_text()
-        assert "```mermaid" not in content
-        assert '<img src="mermaid-diagram-and-table-mermaid-1.svg"' in content
-        assert (mock_dest / "mermaid-diagram-and-table-mermaid-1.svg").exists()
-        svg = (mock_dest / "mermaid-diagram-and-table-mermaid-1.svg").read_text()
-        assert "<svg" in svg
-
-    def test_render_dry_run_no_svgs(self, mock_source: Path, mock_dest: Path) -> None:
-        """Dry run with --render should not write SVG files."""
-        runner.invoke(
-            app,
-            ["sync", str(mock_source), "--dest", str(mock_dest), "--render", "-n"],
-        )
-        svgs = list(mock_dest.glob("*.svg"))
-        assert svgs == []
-
-    @patch("rematter._workers._render_mermaid_blocks", side_effect=_mock_render)
-    def test_render_output_shows_status(
-        self, mock_render, mock_source: Path, mock_dest: Path
-    ) -> None:
-        """With --render, output shows rendering status lines."""
-        result = runner.invoke(
-            app, ["sync", str(mock_source), "--dest", str(mock_dest), "--render"]
-        )
-        assert "rendering mermaid" in result.output
-        assert "rendered" in result.output
-
-
-# ── MERMAID_RE unit tests ────────────────────────────────────────────────────
-
-
-class TestMermaidRegex:
-    def test_matches_mermaid_block(self) -> None:
-        body = "text\n```mermaid\ngraph TD\n  A --> B\n```\nmore text"
-        matches = MERMAID_RE.findall(body)
-        assert len(matches) == 1
-        assert "graph TD" in matches[0]
-
-    def test_no_match_on_other_code_blocks(self) -> None:
-        body = "```python\nprint('hi')\n```"
-        assert MERMAID_RE.findall(body) == []
-
-    def test_multiple_blocks(self) -> None:
-        body = "```mermaid\nA --> B\n```\ntext\n```mermaid\nC --> D\n```"
-        matches = MERMAID_RE.findall(body)
-        assert len(matches) == 2
-
-
-# ── _render_mermaid_blocks unit tests ────────────────────────────────────────
-
-
-class TestRenderMermaidBlocks:
-    """Unit tests using _mock_render since _render_mermaid_blocks needs network."""
-
-    def test_renders_single_block(self, tmp_path: Path) -> None:
-        body = "Before\n```mermaid\ngraph TD\n  A --> B\n```\nAfter"
-        new_body, count = _mock_render(body, "test-note", tmp_path)
-        assert count == 1
-        assert "```mermaid" not in new_body
-        assert '<img src="test-note-mermaid-1.svg"' in new_body
-        assert "Before" in new_body
-        assert "After" in new_body
-        svg_file = tmp_path / "test-note-mermaid-1.svg"
-        assert svg_file.exists()
-        assert "<svg" in svg_file.read_text()
-
-    def test_renders_multiple_blocks(self, tmp_path: Path) -> None:
-        body = "```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\ngraph LR\n  C --> D\n```"
-        new_body, count = _mock_render(body, "multi", tmp_path)
-        assert count == 2
-        assert (tmp_path / "multi-mermaid-1.svg").exists()
-        assert (tmp_path / "multi-mermaid-2.svg").exists()
-
-    def test_no_mermaid_blocks_unchanged(self, tmp_path: Path) -> None:
-        body = "Just plain text\n\n```python\nprint('hi')\n```"
-        new_body, count = _mock_render(body, "no-mermaid", tmp_path)
-        assert count == 0
-        assert new_body == body
-
-    def test_surrounding_content_preserved(self, tmp_path: Path) -> None:
-        body = "# Title\n\nIntro paragraph.\n\n```mermaid\ngraph TD\n  A --> B\n```\n\n## Next Section\n\nMore content."
-        new_body, count = _mock_render(body, "preserve", tmp_path)
-        assert count == 1
-        assert "# Title" in new_body
-        assert "Intro paragraph." in new_body
-        assert "## Next Section" in new_body
-        assert "More content." in new_body
-
-
-# ── sync + mermaid post-processing tests ─────────────────────────────────────
-
-
-class TestSyncMermaidPostProcessing:
-    def _make_file(self, path: Path, content: str) -> Path:
-        path.write_text(content, encoding="utf-8")
-        return path
-
-    @patch("rematter._workers._render_mermaid_blocks", side_effect=_mock_render)
-    def test_render_produces_svg_in_post_step(
-        self, mock_render, tmp_path: Path
-    ) -> None:
-        """Mermaid rendering happens after sync, producing SVG files."""
-        src = self._make_file(
-            tmp_path / "note.md",
-            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
-            "```mermaid\ngraph TD\n  A --> B\n```\n",
-        )
-        dest = tmp_path / "out"
-        dest.mkdir()
-        # Use _sync_worker first (no render), then simulate post-processing
-        status, _ = _sync_worker(
-            src,
-            known_stems=set(),
-            link_path_prefix="/sky",
-            dest=dest,
-            dry_run=False,
-        )
-        assert status == "done"
-        # Dest file should have mermaid blocks (sync doesn't render)
-        content = (dest / "note.md").read_text()
-        assert "```mermaid" in content
-        assert not list(dest.glob("*.svg"))
-
-    def test_sync_without_render_preserves_blocks(self, tmp_path: Path) -> None:
-        src = self._make_file(
-            tmp_path / "note.md",
-            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n"
-            "```mermaid\ngraph TD\n  A --> B\n```\n",
-        )
-        dest = tmp_path / "out"
-        dest.mkdir()
-        status, _ = _sync_worker(
-            src,
-            known_stems=set(),
-            link_path_prefix="/sky",
-            dest=dest,
-            dry_run=False,
-        )
-        assert status == "done"
-        content = (dest / "note.md").read_text()
-        assert "```mermaid" in content
-        assert not list(dest.glob("*.svg"))
-
-
-# ── mermaid SVGs to media dir tests ──────────────────────────────────────────
-
-
-class TestMermaidMediaDir:
-    """When media_config is present, rendered SVGs go to the media dest dir."""
-
-    def test_render_svgs_to_media_dir(self, tmp_path: Path) -> None:
-        """SVGs are written to media dest dir with link prefix in img tags."""
-        dest = tmp_path / "out"
-        dest.mkdir()
-        media = MediaConfig(source="_media", dest="src/assets", link_prefix="/assets")
-        body = "Before\n```mermaid\ngraph TD\n  A --> B\n```\nAfter"
-        new_body, count = _mock_render(body, "test-note", dest, media_config=media)
-        assert count == 1
-        assert '<img src="/assets/test-note-mermaid-1.svg"' in new_body
-        assert (dest / "src" / "assets" / "test-note-mermaid-1.svg").exists()
-        assert not (dest / "test-note-mermaid-1.svg").exists()
-
-    def test_render_svgs_colocated_without_media(self, tmp_path: Path) -> None:
-        """Without media config, SVGs are still co-located with the doc."""
-        dest = tmp_path / "out"
-        dest.mkdir()
-        body = "```mermaid\ngraph TD\n  A --> B\n```"
-        new_body, count = _mock_render(body, "test-note", dest, media_config=None)
-        assert count == 1
-        assert '<img src="test-note-mermaid-1.svg"' in new_body
-        assert (dest / "test-note-mermaid-1.svg").exists()
 
 
 # ── sync path feedback tests ────────────────────────────────────────────────

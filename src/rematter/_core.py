@@ -15,7 +15,6 @@ WIKILINK_RE = re.compile(r"(?<!\!)\[\[([^|\]]+?)(?:\|([^\]]+?))?\]\]")
 WIKILINK_IMAGE_RE = re.compile(r"!\[\[([^|\]]+?)(?:\|([^\]]+?))?\]\]")
 MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 TYPE_TAG_RE = re.compile(r"(?<!\w)#([A-Z][a-zA-Z]+)")
-MERMAID_RE = re.compile(r"```mermaid\n(.*?)```", re.DOTALL)
 
 
 def _slugify(name: str) -> str:
