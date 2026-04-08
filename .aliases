@@ -1,0 +1,2 @@
+[aliases]
+t = "uv run pytest"
