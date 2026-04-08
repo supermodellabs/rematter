@@ -169,8 +169,8 @@ def test_cli_filename_basic(mock_source: Path) -> None:
     # Bad Timestamp.md has an invalid date → exit code 1
     assert result.exit_code == 1
     dated = [f for f in mock_source.iterdir() if f.name.startswith("2026-")]
-    # 28 of 29 files have valid 'created' — all should be renamed
-    assert len(dated) == 28
+    # 27 of 28 files have valid 'created' — all should be renamed
+    assert len(dated) == 27
 
 
 def test_cli_filename_dry_run_makes_no_changes(mock_source: Path) -> None:
