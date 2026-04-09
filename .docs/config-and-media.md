@@ -48,8 +48,9 @@ properties:
 | --- | --- | --- | --- |
 | `link_path_prefix` | string | URL prefix for resolved wikilinks (e.g. `/sky`) | `--link-path-prefix / -l` |
 | `dest` | string | Destination directory for synced files | `--dest / -d` |
-| `media` | object | Media sync config (see below) | *(none — config only)* |
-| `ignore` | list | Glob patterns for files/dirs to skip (matched against filename and relative path) | *(none — config only)* |
+| `media` | object | Media sync config (see below) | *(none -- config only)* |
+| `ignore` | list | Glob patterns for files/dirs to skip (matched against filename and relative path) | *(none -- config only)* |
+| `extract_type_tags` | bool | Whether to extract capitalized Obsidian tags as the `type` field (default: `true`) | *(none -- config only)* |
 
 `dry_run` is CLI-only — it would not make sense in a config file.
 

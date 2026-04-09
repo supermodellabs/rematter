@@ -10,8 +10,10 @@ from typer.testing import CliRunner
 from rematter import (
     WIKILINK_RE,
     MediaConfig,
+    RematterConfig,
     _extract_type_tags,
     _is_timestamp_like,
+    _load_config,
     _resolve_creators,
     _resolve_media_refs,
     _resolve_wikilinks,
@@ -1149,3 +1151,180 @@ class TestConfigLoading:
         """No --dest and no config dest should error."""
         result = runner.invoke(app, ["sync", str(tmp_path)])
         assert result.exit_code != 0
+
+
+# ── extract_type_tags config option tests ─────────────────────────────────────
+
+
+class TestExtractTypeTagsOption:
+    """Unit tests for the extract_type_tags config option via _sync_worker."""
+
+    def _make_file(self, path: Path, content: str) -> Path:
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def test_type_tags_not_extracted_when_disabled(self, tmp_path: Path) -> None:
+        """When extract_type_tags is False, type tags are left in the body and no type field is set."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#Book\n\nContent.\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            extract_type_tags=False,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "type:" not in content
+        assert "#Book" in content
+
+    def test_type_tags_extracted_by_default(self, tmp_path: Path) -> None:
+        """Default behavior (extract_type_tags=True) still extracts type tags."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#Book\n\nContent.\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "type: book" in content
+        assert "#Book" not in content
+
+    def test_multiple_type_tags_allowed_when_disabled(self, tmp_path: Path) -> None:
+        """When extract_type_tags is False, multiple type tags do not cause a warning or skip."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#Book #Film\n\nContent.\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            extract_type_tags=False,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "type:" not in content
+        assert "#Book" in content
+        assert "#Film" in content
+
+    def test_multiple_type_tags_still_rejected_when_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        """When extract_type_tags is True (default), multiple type tags still warn and skip."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#Book #Film\n\nContent.\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, msg = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            extract_type_tags=True,
+        )
+        assert status == "warn"
+        assert "multiple type tags" in msg
+
+    def test_tag_only_lines_preserved_when_disabled(self, tmp_path: Path) -> None:
+        """Tag-only lines should not be stripped from body when extraction is disabled."""
+        src = self._make_file(
+            tmp_path / "note.md",
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#ShortStory\n\nOnce upon a time.\n",
+        )
+        dest = tmp_path / "out"
+        dest.mkdir()
+        status, _ = _sync_worker(
+            src,
+            known_stems=set(),
+            link_path_prefix="/sky",
+            dest=dest,
+            dry_run=False,
+            extract_type_tags=False,
+        )
+        assert status == "done"
+        content = (dest / "note.md").read_text()
+        assert "#ShortStory" in content
+        assert "type:" not in content
+
+    def test_config_extract_type_tags_default_true(self) -> None:
+        """RematterConfig defaults extract_type_tags to True."""
+        config = RematterConfig()
+        assert config.extract_type_tags is True
+
+    def test_config_extract_type_tags_loaded_from_yaml(self, tmp_path: Path) -> None:
+        """extract_type_tags should be loaded from .rematter.yaml."""
+        config_path = tmp_path / ".rematter.yaml"
+        config_path.write_text(
+            "extract_type_tags: false\nlink_path_prefix: /sky\nproperties:\n  publish:\n    type: bool\n    required: false\n"
+        )
+        config = _load_config(tmp_path)
+        assert config.extract_type_tags is False
+
+
+class TestExtractTypeTagsOptionCLI:
+    """CLI integration tests for the extract_type_tags config option."""
+
+    def test_disabled_via_config(self, tmp_path: Path) -> None:
+        """extract_type_tags: false in config should skip extraction."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / ".rematter.yaml").write_text(
+            "link_path_prefix: /sky\nextract_type_tags: false\nproperties:\n"
+            "  created:\n    type: timestamp\n    required: true\n"
+            "  modified:\n    type: timestamp\n    required: true\n"
+            "  synced:\n    type: timestamp\n    required: true\n"
+            "  publish:\n    type: bool\n    required: true\n    sync: false\n"
+        )
+        (src / "note.md").write_text(
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#Author\n\nSome content.\n"
+        )
+        dest = tmp_path / "dest"
+        result = runner.invoke(app, ["sync", str(src), "--dest", str(dest)])
+        assert result.exit_code == 0
+        content = (dest / "note.md").read_text()
+        assert "#Author" in content
+        assert "type:" not in content
+
+    def test_multi_type_allowed_when_disabled(self, tmp_path: Path) -> None:
+        """Multiple type tags should sync without error when extraction is disabled."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / ".rematter.yaml").write_text(
+            "link_path_prefix: /sky\nextract_type_tags: false\nproperties:\n"
+            "  created:\n    type: timestamp\n    required: true\n"
+            "  modified:\n    type: timestamp\n    required: true\n"
+            "  synced:\n    type: timestamp\n    required: true\n"
+            "  publish:\n    type: bool\n    required: true\n    sync: false\n"
+        )
+        (src / "note.md").write_text(
+            "---\ncreated: 2026-01-01\nmodified: 2026-01-01\nsynced:\npublish: true\n---\n#Author #ShortStory\n\nSome content.\n"
+        )
+        dest = tmp_path / "dest"
+        result = runner.invoke(app, ["sync", str(src), "--dest", str(dest)])
+        assert result.exit_code == 0
+        content = (dest / "note.md").read_text()
+        assert "#Author" in content
+        assert "#ShortStory" in content
+        assert "type:" not in content

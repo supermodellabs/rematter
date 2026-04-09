@@ -170,6 +170,7 @@ def sync(
         ignore=config.ignore,
         no_sync_fields=config.no_sync_fields,
         schema=config.schema,
+        extract_type_tags=config.extract_type_tags,
     )
 
 

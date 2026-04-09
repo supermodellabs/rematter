@@ -64,6 +64,7 @@ class RematterConfig:
     dest: str | None = None
     media: MediaConfig | None = None
     ignore: list[str] = field(default_factory=list)
+    extract_type_tags: bool = True
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -125,6 +126,7 @@ def _load_config(source_dir: Path, explicit_path: Path | None = None) -> Rematte
         dest=raw.get("dest"),
         media=media,
         ignore=raw.get("ignore", []),
+        extract_type_tags=raw.get("extract_type_tags", True),
     )
 
     _validate_schema_defaults(config.schema)
@@ -400,6 +402,7 @@ def _sync_worker(
     media_config: MediaConfig | None = None,
     no_sync_fields: set[str] | None = None,
     schema: dict[str, Any] | None = None,
+    extract_type_tags: bool = True,
 ) -> Result:
     """Process a single file for sync: gate, validate, transform, copy."""
     parsed = _load(path)
@@ -428,15 +431,19 @@ def _sync_worker(
             ):
                 return "skip", f"{path.name}: not modified since last sync"
 
-    # Extract type tags from body
-    types, cleaned_body = _extract_type_tags(body)
+    # Extract type tags from body (when enabled)
+    types: list[str] = []
+    if extract_type_tags:
+        types, cleaned_body = _extract_type_tags(body)
 
-    # Multi-type is not supported — skip with a warning
-    if len(types) > 1:
-        return (
-            "warn",
-            f"{path.name}: multiple type tags ({', '.join(sorted(types))}) — skipping",
-        )
+        # Multi-type is not supported — skip with a warning
+        if len(types) > 1:
+            return (
+                "warn",
+                f"{path.name}: multiple type tags ({', '.join(sorted(types))}) — skipping",
+            )
+    else:
+        cleaned_body = body
 
     # Schema validation
     errors = _validate_against_schema(fm, schema) if schema is not None else []
@@ -523,6 +530,7 @@ def _sync_run(
     ignore: list[str] | None = None,
     no_sync_fields: set[str] | None = None,
     schema: dict[str, Any] | None = None,
+    extract_type_tags: bool = True,
 ) -> None:
     """Discover files, build corpus, fan out sync workers."""
     if not source.is_dir():
@@ -567,6 +575,7 @@ def _sync_run(
         media_config=media_config,
         no_sync_fields=no_sync_fields,
         schema=schema,
+        extract_type_tags=extract_type_tags,
     )
     num_workers = min(len(src_files), os.cpu_count() or 4)
 

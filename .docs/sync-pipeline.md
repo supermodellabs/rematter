@@ -22,8 +22,8 @@ Each source file passes through these stages in order:
 2. **Publish gate** — `fm.get("publish") is not True` → skip (handles missing, null, false, non-bool)
 3. **Slug + dest lookup** — `title = path.stem`, `slug = _slugify(title)`, dest file = `dest / f"{slug}.md"`
 4. **Modified comparison** — if dest file exists and has same `modified` value → skip
-5. **Type tag extraction** — `_extract_type_tags(body)` finds capitalized Obsidian tags (`#Book`, `#Film`, `#TV`), returns lowercased types + body with tag-only lines stripped
-6. **Multi-type gate** — more than one capitalized tag → warn and skip (lowercase tags are ignored, treated as content)
+5. **Type tag extraction** — when `extract_type_tags` is `true` (default), `_extract_type_tags(body)` finds capitalized Obsidian tags (`#Book`, `#Film`, `#TV`), returns lowercased types + body with tag-only lines stripped. When `false`, this step is skipped entirely -- tags remain in the body and no `type` field is set
+6. **Multi-type gate** — when extraction is enabled, more than one capitalized tag → warn and skip. When extraction is disabled, multiple capitalized tags are allowed (they are treated as content, not type markers)
 7. **Schema validation** — `_validate_against_schema(fm, schema)` when a schema is provided; same function used by the `validate` command. Schema is the single source of truth for field names, types, and requirements
 8. **Creator resolution** — `_resolve_creators()` converts `fm["creators"]` from wikilinks/strings to `{name, slug}` objects
 9. **Body wikilink resolution** — `_resolve_wikilinks()` on cleaned body. `WIKILINK_RE` has a `(?<!\!)` lookbehind so `![[image.png]]` refs are not mangled
@@ -103,6 +103,8 @@ TYPE_TAG_RE = re.compile(r"(?<!\w)#([A-Z][a-zA-Z]+)")
 Lines consisting entirely of type tags are stripped from the output body. Lines where tags appear alongside other content are preserved (tags remain in text).
 
 Multiple capitalized tags (e.g., `#Book #Film`) are skipped with a warning — not an error. Lowercase tags are ignored entirely.
+
+Type tag extraction can be disabled entirely by setting `extract_type_tags: false` in `.rematter.yaml`. When disabled, capitalized tags are left in the body as content, no `type` field is set, and multiple capitalized tags are allowed without warning.
 
 ## Corpus and Link Resolution
 
