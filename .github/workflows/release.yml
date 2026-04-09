@@ -22,7 +22,7 @@ jobs:
             runner: ubuntu-latest
           - os: linux
             arch: arm64
-            runner: ubuntu-24.04-arm
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
 
     permissions:
       contents: write
@@ -63,7 +63,7 @@ jobs:
   homebrew:
     name: Update Homebrew tap
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Release to Homebrew tap
         uses: Justintime50/homebrew-releaser@v3
