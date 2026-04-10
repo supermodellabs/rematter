@@ -69,7 +69,7 @@ Returns a `RematterConfig` dataclass. The `.schema` property returns `{propertie
 
 ### Ignore Patterns
 
-The `ignore` key is a list of glob patterns. Each file is checked against patterns using both its filename and its path relative to the base directory. Uses stdlib `fnmatch`. `_filter_ignored()` applies filtering in both `_run()` (filename/transform/validate) and `_sync_run()` (sync).
+The `ignore` key is a list of glob patterns. Each file is checked against patterns using both its filename and its path relative to the base directory. Uses stdlib `fnmatch`. `_filter_ignored()` applies filtering in both `_run()` (date-extract/transform/validate) and `_sync_run()` (sync).
 
 ### Per-Property `sync` Key
 

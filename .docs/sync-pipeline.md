@@ -1,6 +1,6 @@
 # Sync Pipeline
 
-Syncs Obsidian vault markdown into an Astro content collection. Unlike `filename` and `transform` (which use `_run()` for simple per-file mutations), sync has its own dispatcher `_sync_run()` and a multi-stage worker pipeline.
+Syncs Obsidian vault markdown into an Astro content collection. Unlike `date-extract` and `transform` (which use `_run()` for simple per-file mutations), sync has its own dispatcher `_sync_run()` and a multi-stage worker pipeline.
 
 ## Config Resolution
 
