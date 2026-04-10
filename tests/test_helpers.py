@@ -22,7 +22,7 @@ def test_load_valid_frontmatter(tmp_path: Path) -> None:
 
 def test_load_datetime_string_stays_as_string(tmp_path: Path) -> None:
     """PyYAML 6 safe_load does NOT auto-convert 'YYYY-MM-DD HH:MM' to datetime.
-    The value is returned as a plain string, which _filename_worker handles via
+    The value is returned as a plain string, which _date_extract_worker handles via
     datetime.fromisoformat() fallback."""
     f = tmp_path / "note.md"
     f.write_text("---\ncreated: 2026-02-12 15:03\n---\nBody.\n")

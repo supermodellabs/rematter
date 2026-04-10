@@ -7,13 +7,13 @@ src/rematter/
 ├── __init__.py     re-exports everything; keeps test imports stable
 ├── _core.py        _load(), _dump(), regex constants, _slugify()
 ├── _workers.py     all workers, config/schema loading, sync/validate helpers, dispatchers, ignore filtering, console singletons
-└── cli.py          Typer app: filename, transform, sync, validate commands
+└── cli.py          Typer app: date-extract, transform, sync, validate commands
 tests/
 ├── conftest.py     mock_source, mock_dest, empty_vault fixtures
 ├── mock_source/    29 .md files + .rematter.yaml + _media/ — all fixture data lives here
 ├── mock_dest/      2 synthetic files (already-synced + dest-only for corpus)
 ├── test_helpers.py _load / _dump unit tests
-├── test_filename.py
+├── test_date_extract.py
 ├── test_transform.py
 ├── test_sync.py    wikilinks, type tags, creator resolution, schema validation, sync pipeline, media sync, hero images
 └── test_validate.py schema validation, fix mode, config loading, CLI integration
@@ -40,7 +40,7 @@ tests/
 
 ## Key Gotcha: PyYAML 6 + Python 3.14 Datetime Parsing
 
-PyYAML's `safe_load` does **not** auto-convert `2026-02-12 15:03` (no seconds) to a `datetime` object — it returns a plain string. `_filename_worker` handles all three value types:
+PyYAML's `safe_load` does **not** auto-convert `2026-02-12 15:03` (no seconds) to a `datetime` object — it returns a plain string. `_date_extract_worker` handles all three value types:
 
 1. `datetime.datetime` object → `.date()`
 2. `datetime.date` object → used directly

@@ -8,7 +8,7 @@ import typer
 from typing_extensions import Annotated
 
 from rematter._workers import (
-    _filename_worker,
+    _date_extract_worker,
     _load_config,
     _load_schema,
     _run,
@@ -27,7 +27,7 @@ app = typer.Typer(
 
 
 @app.command()
-def filename(
+def date_extract(
     directory: Annotated[
         Path, typer.Argument(help="Directory containing markdown files")
     ],
@@ -51,7 +51,7 @@ def filename(
     frontmatter, and writes the updated content. Strips frontmatter entirely when no
     fields remain. Files that already carry the date prefix are silently skipped.
     """
-    _run(directory, recursive, dry_run, _filename_worker, field=field)
+    _run(directory, recursive, dry_run, _date_extract_worker, field=field)
 
 
 @app.command()

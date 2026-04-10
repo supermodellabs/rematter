@@ -208,10 +208,10 @@ def _run(
         raise typer.Exit(code=1)
 
 
-# ── filename worker ────────────────────────────────────────────────────────────
+# ── date-extract worker ────────────────────────────────────────────────────────
 
 
-def _filename_worker(path: Path, *, field: str, dry_run: bool) -> Result:
+def _date_extract_worker(path: Path, *, field: str, dry_run: bool) -> Result:
     if DATE_PREFIX_RE.match(path.name):
         return "skip", path.name
 

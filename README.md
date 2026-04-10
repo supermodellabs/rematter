@@ -74,10 +74,10 @@ rematter transform <directory> --field OLD --to NEW [--recursive] [--dry-run]
 
 Renames a field across all markdown files. Key order is preserved. Files where the target name already exists are skipped with an error.
 
-### `filename` -- Prepend dates to filenames
+### `date-extract` -- Prepend dates to filenames
 
 ```bash
-rematter filename <directory> [--field DATE_FIELD] [--recursive] [--dry-run]
+rematter date-extract <directory> [--field DATE_FIELD] [--recursive] [--dry-run]
 ```
 
 Reads a date field (default: `Date`), prepends `YYYY-MM-DD -` to the filename, and removes the field from frontmatter. Already-prefixed files are skipped. Useful for systems like Notion that export a date field, when you want to pull that out into the filename for Obsidian's filesystem-centric approach.
