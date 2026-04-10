@@ -10,8 +10,8 @@ on:
     paths:
       - ".github/workflows/**"
 jobs:
-  test:
-    name: Test (Python 3.13)
+  uv-testbox:
+    name: Testbox uv Python v3.13
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
@@ -21,6 +21,12 @@ jobs:
           python-version: "3.13"
       - name: Install dependencies
         run: uv sync --dev
+      - name: Capture PATH for bash environment
+        shell: bash
+        run: |
+          BASH_ENV_FILE="$RUNNER_TEMP/gha-testbox-path.env"
+          printf 'export PATH=%q\n' "$PATH" > "$BASH_ENV_FILE"
+          echo "BASH_ENV=$BASH_ENV_FILE" >> "$GITHUB_ENV"
       - name: Begin Testbox
         uses: useblacksmith/begin-testbox@v2
         with:
