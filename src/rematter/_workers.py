@@ -301,11 +301,11 @@ def _resolve_wikilinks(
         target = m.group(1).strip()
         label = m.group(2).strip() if m.group(2) else None
         if target in known_stems:
-            display = label if label else target
+            display = label or target
             slug = _slugify(target)
             prefix = link_path_prefix.rstrip("/")
             return f"[{display}]({prefix}/{slug})"
-        return label if label else target
+        return label or target
 
     return WIKILINK_RE.sub(_replace, body)
 
@@ -341,9 +341,7 @@ def _resolve_media_refs(
         alt = m.group(1)
         path_str = m.group(2)
         # Only rewrite if path points into the media source dir
-        if path_str.startswith(media_config.source + "/") or path_str.startswith(
-            media_config.source + "\\"
-        ):
+        if path_str.startswith((media_config.source + "/", media_config.source + "\\")):
             filename = Path(path_str).name
             src_path = media_source / filename
             if src_path.exists():
@@ -384,7 +382,7 @@ def _resolve_creators(
         if m:
             target = m.group(1).strip()
             label = m.group(2).strip() if m.group(2) else None
-            name = label if label else target
+            name = label or target
             if target in known_stems:
                 resolved.append({"name": name, "slug": _slugify(target)})
             else:
@@ -485,7 +483,7 @@ def _sync_worker(
             fm["hero"] = f"{media_config.link_prefix.rstrip('/')}/{hero_filename}"
 
     # Set synced timestamp (match Obsidian's format: "2026-02-04 11:01")
-    synced_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    synced_ts = datetime.now().strftime("%Y-%m-%d %H:%M")  # noqa: DTZ005 — Obsidian uses local time
     fm["synced"] = synced_ts
 
     # Set title from source filename
@@ -642,7 +640,7 @@ def _validate_schema_defaults(schema: dict[str, Any]) -> None:
                 f"strftime format string (e.g. '%Y-%m-%d %H:%M'), got: {default!r}"
             )
         try:
-            datetime.now().strftime(default)
+            datetime.now().strftime(default)  # noqa: DTZ005 — format validation only
         except ValueError as exc:
             raise ValueError(
                 f"schema error: '{property}' has invalid strftime format: {default!r} — {exc}"
@@ -689,12 +687,13 @@ def _validate_against_schema(fm: dict[str, Any], schema: dict[str, Any]) -> list
 
         # Type check
         expected_type = spec.get("type")
-        if expected_type and expected_type in _SCHEMA_TYPE_CHECKERS:
-            if not _SCHEMA_TYPE_CHECKERS[expected_type](val):
-                errors.append(
-                    f"'{property_field}' must be {expected_type}, got '{val}'"
-                )
-                continue
+        if (
+            expected_type
+            and expected_type in _SCHEMA_TYPE_CHECKERS
+            and not _SCHEMA_TYPE_CHECKERS[expected_type](val)
+        ):
+            errors.append(f"'{property_field}' must be {expected_type}, got '{val}'")
+            continue
 
         # Enum check
         allowed = spec.get("enum")
@@ -738,7 +737,7 @@ def _resolve_default(spec: dict[str, Any]) -> Any:
     if default is None:
         return None
     if spec.get("type") == "timestamp" and isinstance(default, str) and "%" in default:
-        return datetime.now().strftime(default)
+        return datetime.now().strftime(default)  # noqa: DTZ005 — Obsidian uses local time
     return default
 
 
@@ -911,11 +910,7 @@ _SEP_CELL_RE = re.compile(r"^\s*:?-{1,}:?\s*$")
 
 def _split_table_row(line: str) -> list[str]:
     """Split a table row line into cell contents (trimmed), dropping outer pipes."""
-    stripped = line.strip()
-    if stripped.startswith("|"):
-        stripped = stripped[1:]
-    if stripped.endswith("|"):
-        stripped = stripped[:-1]
+    stripped = line.strip().removeprefix("|").removesuffix("|")
     return [c.strip() for c in stripped.split("|")]
 
 
@@ -1069,7 +1064,7 @@ def _step_headings_text(text: str) -> str:
         if not stack:
             out_lvl = in_lvl  # top-level: preserve depth
         else:
-            parent_in, parent_out = stack[-1]
+            _parent_in, parent_out = stack[-1]
             out_lvl = min(parent_out + 1, in_lvl)
         stack.append((in_lvl, out_lvl))
         suffix = "\n" if raw.endswith("\n") else ""
@@ -1102,9 +1097,7 @@ def _is_external_or_anchor(target: str) -> bool:
         return True
     if "://" in target.split("#", 1)[0].split("?", 1)[0]:
         return True
-    if target.startswith("mailto:"):
-        return True
-    return False
+    return bool(target.startswith("mailto:"))
 
 
 def _split_target(target: str) -> tuple[str, str]:
@@ -1132,7 +1125,12 @@ def _rewrite_md_links(
     md_is_moving = md_old_dir != md_new_dir
 
     def _sub(m: re.Match[str]) -> str:
-        bang, label, target, title = m.group(1), m.group(2), m.group(3), m.group(4) or ""
+        bang, label, target, title = (
+            m.group(1),
+            m.group(2),
+            m.group(3),
+            m.group(4) or "",
+        )
         if _is_external_or_anchor(target):
             return m.group(0)
         path_part, suffix = _split_target(target)
@@ -1226,9 +1224,7 @@ def _move_linked_dir(
     try:
         tgt_path.relative_to(src_path)
     except ValueError:
-        result.errors.append(
-            f"target is outside source ({src_path}): {tgt_path}"
-        )
+        result.errors.append(f"target is outside source ({src_path}): {tgt_path}")
         return result
     if not tgt_path.exists():
         result.errors.append(f"target does not exist: {tgt_path}")
@@ -1246,9 +1242,7 @@ def _move_linked_dir(
     try:
         dest_path.relative_to(src_path)
     except ValueError:
-        result.errors.append(
-            f"destination is outside source ({src_path}): {dest_path}"
-        )
+        result.errors.append(f"destination is outside source ({src_path}): {dest_path}")
         return result
 
     # When --to is given, dest must not already exist (avoids ambiguous merges).

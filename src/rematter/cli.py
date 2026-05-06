@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 from rematter._workers import (
     _date_extract_worker,
@@ -15,8 +15,8 @@ from rematter._workers import (
     _move_linked_dir,
     _reflow_worker,
     _run,
-    _sync_run,
     _step_headings_worker,
+    _sync_run,
     _transform_worker,
     _validate_worker,
     err_console,

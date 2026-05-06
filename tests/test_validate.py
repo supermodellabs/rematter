@@ -163,7 +163,7 @@ def test_fix_adds_missing_bool_default(tmp_path: Path) -> None:
     fm = {**VALID_FM}
     del fm["publish"]
     f = _write_note(tmp_path, "fixme.md", fm)
-    status, msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
+    status, _msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
     assert status == "done"
     result = _load(f)
     assert result is not None
@@ -225,7 +225,7 @@ def test_fix_null_default_adds_key_with_null(tmp_path: Path) -> None:
     }
     # missing 'synced' — schema default is null
     f = _write_note(tmp_path, "fixme.md", fm)
-    status, msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
+    status, _msg = _validate_worker(f, schema=SCHEMA, fix=True, dry_run=False)
     assert status == "done"
     result = _load(f)
     assert result is not None
@@ -263,9 +263,9 @@ def test_load_config_from_directory(tmp_path: Path) -> None:
 
 
 def test_load_config_missing_raises(tmp_path: Path) -> None:
-    from rematter._workers import _load_config
-
     import pytest
+
+    from rematter._workers import _load_config
 
     with pytest.raises(FileNotFoundError):
         _load_config(tmp_path)
@@ -491,7 +491,7 @@ def test_fix_reorder_preserves_extra_keys_at_end(tmp_path: Path) -> None:
         "created": "2026-02-12 15:03",
     }
     f = _write_note(tmp_path, "extra.md", fm)
-    status, msg = _validate_worker(f, schema=schema_with_custom, fix=True, dry_run=False)
+    status, _msg = _validate_worker(f, schema=schema_with_custom, fix=True, dry_run=False)
     assert status == "done"
     result = _load(f)
     assert result is not None

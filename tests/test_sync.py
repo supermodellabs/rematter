@@ -206,7 +206,7 @@ class TestIsTimestampLike:
     def test_datetime_object(self) -> None:
         from datetime import datetime
 
-        assert _is_timestamp_like(datetime(2026, 1, 1, 12, 0)) is True
+        assert _is_timestamp_like(datetime(2026, 1, 1, 12, 0)) is True  # noqa: DTZ001 — testing naive datetime acceptance
 
     def test_iso_date_string(self) -> None:
         assert _is_timestamp_like("2026-01-01") is True
@@ -1126,7 +1126,7 @@ class TestRequiresValidation:
 class TestConfigLoading:
     def test_cli_override_precedence(self, mock_source: Path, mock_dest: Path) -> None:
         """CLI flags should override config values."""
-        result = runner.invoke(
+        runner.invoke(
             app,
             [
                 "sync",

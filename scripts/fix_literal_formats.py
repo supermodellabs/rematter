@@ -35,7 +35,7 @@ def main() -> int:
         print(f"error: {directory} is not a directory", file=sys.stderr)
         return 1
 
-    now = datetime.now()
+    now = datetime.now()  # noqa: DTZ005 — local time matches Obsidian's frontmatter format
     fixed_total = 0
 
     for md in sorted(directory.rglob("*.md")):
